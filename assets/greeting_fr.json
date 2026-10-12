@@ -1,0 +1,12 @@
+{
+  "text": "Bonjour, je suis le réceptionniste de l'Hôtel Panorama",
+  "engine": "gTTS",
+  "lang": "fr",
+  "format": "wav",
+  "codec": "pcm_s16le",
+  "sample_rate": 16000,
+  "channels": 1,
+  "sample_width_bytes": 2,
+  "duration_s": 3.816,
+  "note": "Généré par gTTS (français), converti en WAV PCM 16 kHz mono avec ffmpeg. Le processus téléphonique lit ce fichier et n'appelle pas le service TTS à chaque appel."
+}
