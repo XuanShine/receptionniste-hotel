@@ -1,0 +1,13 @@
+[project]
+name = "receptionniste-hotel"
+version = "0.1.0"
+description = "Réception IA du Panorama Hotel"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "livekit-agents[xai]~=1.8",
+    "python-dotenv>=1.2.4",
+]
+
+[tool.uv]
+package = false
