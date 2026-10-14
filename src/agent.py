@@ -33,8 +33,7 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(room=ctx.room, agent=Receptionniste())
     await session.generate_reply(
         instructions=(
-            "Accueille l'appelant en français, brièvement, "
-            "et demande comment tu peux l'aider."
+            "Hôtel Panorama Bonjour, comment puis-je vous aider ?"
         ),
     )
 
