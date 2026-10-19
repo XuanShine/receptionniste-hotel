@@ -1,9 +1,12 @@
 # Réceptionniste Hôtel
 
-Réception IA du Panorama Hotel. Version 1 : un appel entrant 3CX arrive sur LiveKit Cloud par un trunk SIP, puis un agent Python répond avec Grok Voice.
+Réception IA du Panorama Hotel. Version 1 : un appel entrant 3CX arrive sur LiveKit Cloud par un trunk SIP, puis un agent Python répond. Cartesia entend et parle. Grok répond.
 
 ```
-Appelant → 3CX → SIP (PCMU, port 5060) → LiveKit → agent Python → Grok Voice
+Appelant → 3CX → SIP → LiveKit → agent Python
+                                  ├ entend : Cartesia ink-2, par LiveKit Inference
+                                  ├ répond : Grok 4.3, par LiveKit Inference (repli xAI si XAI_API_KEY)
+                                  └ parle  : Cartesia sonic-3, voix Henri
 ```
 
 Appels entrants seulement. Pas de réservation, pas de PMS, pas d'appel sortant.
@@ -11,8 +14,8 @@ Appels entrants seulement. Pas de réservation, pas de PMS, pas d'appel sortant.
 ## Prérequis
 
 - Python 3.12 et [uv](https://docs.astral.sh/uv/)
-- Un projet [LiveKit Cloud](https://cloud.livekit.io/)
-- Une clé API [xAI](https://console.x.ai/) (`XAI_API_KEY`)
+- Un projet [LiveKit Cloud](https://cloud.livekit.io/). LiveKit Inference transcrit, appelle Grok et synthétise la voix.
+- Une clé API [xAI](https://console.x.ai/) (`XAI_API_KEY`), facultative. Elle sert si LiveKit Inference refuse une requête Grok.
 - L'adresse IP publique du PBX 3CX
 
 ## Configuration
@@ -28,17 +31,20 @@ Renseigner dans `.env` :
 | `LIVEKIT_URL` | URL WebSocket du projet, `wss://….livekit.cloud` |
 | `LIVEKIT_API_KEY` | Clé API LiveKit |
 | `LIVEKIT_API_SECRET` | Secret API LiveKit |
-| `XAI_API_KEY` | Clé xAI, lue par le plugin Grok Voice |
+| `XAI_API_KEY` | Facultatif. Si LiveKit Inference refuse une requête Grok, l'agent la renvoie directement à xAI |
+| `CARTESIA_VOICE_ID` | Voix Cartesia, défaut Henri `d9f4af15-c402-4f50-bbda-d8823d028d6a` |
 | `SIP_TRUNK_NAME` | Nom du trunk entrant, défaut `3cx-panorama` |
 | `SIP_ALLOWED_ADDRESSES` | IP publique de 3CX en CIDR, ex. `203.0.113.10/32` |
 | `SIP_NUMBERS` | Numéros E.164 acceptés, séparés par des virgules. Vide : tout numéro venant de l'IP autorisée |
 | `AGENT_NAME` | Nom dispatché, défaut `receptionniste` |
-| `GROK_VOICE` | Voix Grok, défaut `Ara` |
 
 `.env` n'est pas versionné. Les scripts le chargent au démarrage.
 
+Installer les dépendances, puis lancer les tests.
+
 ```bash
 uv sync
+uv run python -m unittest discover -s tests
 ```
 
 ## Trunk et dispatch
@@ -59,13 +65,13 @@ La règle ouvre une room `call-…` par appel et dispatche l'agent `AGENT_NAME` 
 uv run python src/agent.py console
 ```
 
-`console` parle à Grok depuis le micro, sans 3CX. Utile pour vérifier la clé xAI et la voix.
+`console` parle depuis le micro, sans 3CX. Ce premier appel vérifie ink-2. La liste des modèles LiveKit du 2026-10-19 marque ink-2 comme anglais seulement.
 
 ```bash
 uv run python src/agent.py dev
 ```
 
-`dev` enregistre le worker sur LiveKit Cloud. Il doit tourner pour qu'un appel soit décroché. Le modèle est celui du plugin (`grok-voice-think-fast-1.0`), avec la détection de tour côté Grok.
+`dev` enregistre le worker sur LiveKit Cloud. Il doit tourner pour qu'un appel soit décroché. L'agent entend avec `cartesia/ink-2`, répond avec `xai/grok-4.3` et parle avec `cartesia/sonic-3`, voix Henri. Le SDK ajoute le VAD Silero et son détecteur de tour. La phrase de transfert n'est pas interruptible. La synthèse reste en français, même si les instructions autorisent l'anglais ou l'italien. La dépendance reste `livekit-agents[xai]~=1.8`. LiveKit Inference est dans le paquet. L'extra `xai` sert au repli.
 
 L'agent accueille en français. Il ne consulte aucun système hôtelier.
 
