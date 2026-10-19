@@ -1,4 +1,4 @@
-"""Worker LiveKit : répond aux appels SIP et parle avec Grok Voice."""
+"""Worker LiveKit : répond aux appels SIP. Cartesia entend et parle, Grok répond."""
 
 import logging
 import os
@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
     JobContext,
     RunContext,
     cli,
@@ -16,8 +15,8 @@ from livekit.agents import (
     get_job_context,
 )
 from livekit.agents.llm import ToolResult
-from livekit.plugins import xai
 
+from pipeline import VoicePipeline
 from transfer import (
     RECEPTION_PHONE,
     TransferOutcome,
@@ -34,7 +33,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = logging.getLogger("receptionniste")
 AGENT_NAME = os.environ.get("AGENT_NAME", "receptionniste")
-GROK_VOICE = os.environ.get("GROK_VOICE", "Ara")
+PIPELINE = VoicePipeline.from_env(os.environ)
 
 INSTRUCTIONS = (
     Path(__file__).resolve().parent / "instructions.md"
@@ -129,9 +128,7 @@ server = AgentServer()
 
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
-    session = AgentSession(
-        llm=xai.realtime.RealtimeModel(voice=GROK_VOICE),
-    )
+    session = PIPELINE.new_session()
     await session.start(room=ctx.room, agent=Receptionniste())
     await session.generate_reply(
         instructions=(
