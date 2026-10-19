@@ -18,6 +18,8 @@ from livekit.agents import (
 )
 from livekit.plugins import xai
 
+from record import keep_dialogue
+
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 logger = logging.getLogger("receptionniste")
@@ -113,6 +115,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         llm=xai.realtime.RealtimeModel(voice=GROK_VOICE),
     )
+    keep_dialogue(session, ctx)
     await session.start(room=ctx.room, agent=Receptionniste())
     await session.generate_reply(
         instructions=(

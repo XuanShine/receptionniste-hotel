@@ -69,6 +69,8 @@ uv run python src/agent.py dev
 
 L'agent accueille en français. Il ne consulte aucun système hôtelier.
 
+Le worker écrit un fichier texte en français par appel dans `record/`, console compris. Ce dossier n'est pas versionné.
+
 ## Trunk 3CX
 
 Dans l'admin 3CX, créer un trunk **Generic SIP, IP-based, sans registration** :
