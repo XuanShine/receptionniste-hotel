@@ -6,7 +6,7 @@ Réception IA du Panorama Hotel. Version 1 : un appel entrant 3CX arrive sur Liv
 Appelant → 3CX → SIP (PCMU, port 5060) → LiveKit → agent Python → Grok Voice
 ```
 
-Appels entrants seulement. Pas de réservation, pas de PMS, pas d'appel sortant.
+Appels entrants seulement. Pas d'appel sortant. Les disponibilités et les réservations passent par WuBook Wired.
 
 ## Prérequis
 
@@ -34,6 +34,8 @@ Renseigner dans `.env` :
 | `SIP_NUMBERS` | Numéros E.164 acceptés, séparés par des virgules. Vide : tout numéro venant de l'IP autorisée |
 | `AGENT_NAME` | Nom dispatché, défaut `receptionniste` |
 | `GROK_VOICE` | Voix Grok, défaut `Ara` |
+| `WUBOOK_TOKEN` | Jeton permanent WuBook Wired |
+| `WUBOOK_LCODE` | Code entier de l'établissement WuBook |
 
 `.env` n'est pas versionné. Les scripts le chargent au démarrage.
 
@@ -67,9 +69,30 @@ uv run python src/agent.py dev
 
 `dev` enregistre le worker sur LiveKit Cloud. Il doit tourner pour qu'un appel soit décroché. Le modèle est celui du plugin (`grok-voice-think-fast-1.0`), avec la détection de tour côté Grok.
 
-L'agent accueille en français. Il ne consulte aucun système hôtelier.
+L'agent accueille en français. Pour un séjour daté, il interroge WuBook. Il n'annonce aucun prix que l'outil n'a pas renvoyé.
+
+Si l'appelant demande à parler à un réceptionniste, l'agent dit « Très bien, je vous transfère à mon collègue. » puis envoie un SIP REFER vers le poste 10. La cible par défaut est `sip:10@hotelpanorama.on3cx.fr`. LiveKit joue la tonalité d'attente et laisse sonner 60 secondes.
+
+| Variable | Rôle |
+| --- | --- |
+| `SIP_TRANSFER_TO` | URI REFER complet (`sip:` ou `tel:`). S'il est défini, il remplace le poste et l'hôte |
+| `SIP_TRANSFER_EXTENSION` | Poste, défaut `10` |
+| `SIP_TRANSFER_HOST` | Hôte du PBX dans l'URI, défaut `hotelpanorama.on3cx.fr` |
+| `SIP_OUTBOUND_TRUNK_ID` | Trunk sortant LiveKit. Utilisé seulement si le REFER est refusé : l'agent appelle alors le poste et le fait entrer dans la room |
+
+Sur le trunk 3CX **LiveKitGrok**, activer **Allow Carrier Side Transfers (SIP REFER)**. Sans cette option, 3CX répond 403 et l'appelant reste avec l'agent, qui donne le 04 93 36 80 80. Le repli `SIP_OUTBOUND_TRUNK_ID` suppose un trunk sortant LiveKit vers 3CX, et une route entrante de ce trunk qui envoie le numéro composé (le poste `10`) vers l'extension 10.
 
 Le worker écrit un fichier texte en français par appel dans `record/`, console compris. Ce dossier n'est pas versionné.
+
+## WuBook
+
+L'agent parle à WuBook Wired en XML-RPC, sur `https://wired.wubook.net/xrws/`. Le slash final fait partie de l'adresse. `WUBOOK_TOKEN` est le jeton permanent. `WUBOOK_LCODE` est le code de l'établissement. Chaque réponse est une paire `[code, résultat]`. `0` veut dire que l'appel a réussi. Un code négatif est une erreur. Les codes `-1`, `-10`, `-13`, `-17`, `-18` et `-19` deviennent un message explicite.
+
+`verifier_disponibilite_et_prix` lit `fetch_rooms_values` et `fetch_plan_prices` pour le plan `0`. La date de fin de ces deux lectures est incluse. La dernière nuit cotée est donc le jour de départ moins un jour. L'outil ne garde que les chambres réelles `329039`, `329667`, `329670`, `407751`, `469743` et `469744`, après les avoir vérifiées avec `fetch_rooms`. Une chambre est proposée si elle est libre chaque nuit, sans fermeture, si le séjour minimum est respecté, si le séjour maximum l'est aussi quand WuBook en pose un, et si `occupancy` couvre les adultes et les enfants. Le prix vient du plan. Une nuit sous 45 € écarte la chambre. La réponse donne le total et le prix de chaque nuit.
+
+`creer_reservation` relit la disponibilité et le prix, puis appelle `new_reservation` avec `status` `1`, `ignore_restrs` `0`, `ignore_avail` `0`, `ccard` `0` et `origin` `vocal`. Il relit ensuite la réservation avec `fetch_booking` et renvoie le code lu. Aucune carte n'est demandée au téléphone.
+
+Le catalogue des chambres et les grilles restent en cache 5 minutes. `fetch_rooms_values` est limité à 240 appels par 12 h. La relecture qui précède une réservation n'utilise pas ce cache. Les tests ouvrent un serveur XML-RPC local. Ils n'appellent pas WuBook.
 
 ## Trunk 3CX
 
