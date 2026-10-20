@@ -1,12 +1,17 @@
 import asyncio
+import json
+import os
 import sys
 import tempfile
 import unittest
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
+
+import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -174,6 +179,93 @@ class _Session:
         self.history = _History(items)
 
 
+class _Response:
+    def __init__(
+        self, status_code: int, payload: object, *, bad_json: bool = False
+    ) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self._bad_json = bad_json
+        self.content = b"{}"
+
+    def json(self) -> object:
+        if self._bad_json:
+            raise json.JSONDecodeError("bad", "doc", 0)
+        return self._payload
+
+
+class _Grok:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        payload: object | None = None,
+        error: BaseException | None = None,
+        bad_json: bool = False,
+    ) -> None:
+        self.status = status
+        self.payload = {} if payload is None else payload
+        self.error = error
+        self.bad_json = bad_json
+        self.posts: list[tuple[str, dict[str, object]]] = []
+        self.timeouts: list[object] = []
+
+    def factory(self) -> type:
+        grok = self
+
+        class Client:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                grok.timeouts.append(kwargs.get("timeout"))
+
+            async def __aenter__(self) -> "Client":
+                return self
+
+            async def __aexit__(self, *exc: object) -> None:
+                return None
+
+            async def post(self, url: str, **kwargs: object) -> _Response:
+                grok.posts.append((url, kwargs))
+                if grok.error is not None:
+                    raise grok.error
+                return _Response(grok.status, grok.payload, bad_json=grok.bad_json)
+
+        return Client
+
+
+def _output(text: str) -> dict[str, object]:
+    return {"output": [{"content": [{"type": "output_text", "text": text}]}]}
+
+
+def _collected(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(_collected(item) for item in value.values())
+    if isinstance(value, list):
+        return "\n".join(_collected(item) for item in value)
+    return ""
+
+
+@contextmanager
+def _shutdown(root: Path, grok: _Grok, *, key: str | None) -> Iterator[_Context]:
+    session = _Session(transfer_items())
+    ctx = _Context()
+    ctx.room.remote_participants["sip"] = _Participant(
+        "+33612345678", "sip_+33612345678"
+    )
+    overrides = {} if key is None else {"XAI_API_KEY": key}
+    with (
+        patch.object(record, "_record_root", return_value=root),
+        patch.object(record.time, "time", return_value=at(22, 14, 3).timestamp()),
+        patch.object(record.httpx, "AsyncClient", grok.factory()),
+        patch.dict(os.environ, overrides),
+    ):
+        if key is None:
+            os.environ.pop("XAI_API_KEY", None)
+        record.keep_dialogue(session, ctx)
+        yield ctx
+
+
 class RecordTest(unittest.TestCase):
     def test_transfer_screenplay(self) -> None:
         self.assertEqual(record.render(dialogue()), SCREENPLAY)
@@ -311,7 +403,10 @@ class RecordTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch.object(record, "_record_root", return_value=root):
+            with (
+                patch.object(record, "_record_root", return_value=root),
+                patch.dict(os.environ, {"XAI_API_KEY": ""}),
+            ):
                 record.keep_dialogue(session, ctx)
                 record.keep_dialogue(session, ctx)
                 self.assertEqual(len(ctx.callbacks), 1)
@@ -327,7 +422,124 @@ class RecordTest(unittest.TestCase):
             self.assertIn("Appelant : +33612345678", text)
             self.assertIn("Appelant — Je voudrais parler à quelqu'un.", text)
             self.assertIn("Salle : call-AJ_8f3c", text)
+            self.assertNotIn("Résumé", text)
             self.assertTrue(files[0].name.endswith("_call-AJ_8f3c_job_1.txt"))
+
+    def _assert_grok_saw_screenplay(self, grok: _Grok) -> None:
+        self.assertEqual(len(grok.posts), 1)
+        url, request = grok.posts[0]
+        seen = _collected(request["json"])
+        self.assertEqual(url, "https://api.x.ai/v1/responses")
+        self.assertIn(SCREENPLAY, seen)
+        self.assertIn("grok-4-1-fast-non-reasoning", seen)
+        headers = request["headers"]
+        self.assertIsInstance(headers, dict)
+        self.assertEqual(headers["Authorization"], "Bearer test-key")
+        self.assertIsInstance(grok.timeouts[0], float)
+        self.assertGreater(grok.timeouts[0], 0)
+        self.assertLessEqual(grok.timeouts[0], 8)
+
+    def test_shutdown_closes_with_one_epilogue(self) -> None:
+        line = "Le client demande un réceptionniste."
+        grok = _Grok(
+            payload={
+                "output": [
+                    {
+                        "content": [
+                            {"type": "reasoning_text", "text": "brouillon"},
+                            {
+                                "type": "output_text",
+                                "text": "Résumé : Le client demande\nun réceptionniste.",
+                            },
+                        ]
+                    }
+                ]
+            }
+        )
+        screenplay = SCREENPLAY.encode("utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            with _shutdown(Path(tmp), grok, key="test-key") as ctx:
+                asyncio.run(ctx.callbacks[0]())
+            files = list(Path(tmp).iterdir())
+            self.assertEqual(len(files), 1)
+            data = files[0].read_bytes()
+        epilogue = f"\nRésumé : {line}\n".encode()
+        self.assertEqual(data, screenplay + epilogue)
+        self._assert_grok_saw_screenplay(grok)
+
+    def test_summary_failure_leaves_the_screenplay(self) -> None:
+        screenplay = SCREENPLAY.encode("utf-8")
+        cases: tuple[tuple[str, _Grok, str | None, bool], ...] = (
+            (
+                "timeout",
+                _Grok(error=httpx.TimeoutException("délai")),
+                "test-key",
+                True,
+            ),
+            (
+                "non-200",
+                _Grok(status=503, payload=_output("Le client attend.")),
+                "test-key",
+                True,
+            ),
+            ("empty", _Grok(payload=_output(" \n ")), "test-key", True),
+            ("missing key", _Grok(payload=_output("Le client attend.")), None, False),
+            ("bad json", _Grok(bad_json=True), "test-key", True),
+            ("too long", _Grok(payload=_output("a" * 501)), "test-key", True),
+        )
+        for name, grok, key, called in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    with _shutdown(root, grok, key=key) as ctx:
+                        asyncio.run(ctx.callbacks[0]())
+                    files = list(root.iterdir())
+                    self.assertEqual(len(files), 1)
+                    data = files[0].read_bytes()
+                self.assertEqual(data, screenplay)
+                self.assertNotIn("Résumé".encode(), data)
+                if called:
+                    self._assert_grok_saw_screenplay(grok)
+                else:
+                    self.assertEqual(grok.posts, [])
+
+    def test_closed_file_skips_grok(self) -> None:
+        grok = _Grok(payload=_output("Le client demande un réceptionniste."))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with _shutdown(root, grok, key="test-key") as ctx:
+                asyncio.run(ctx.callbacks[0]())
+                files = list(root.iterdir())
+                self.assertEqual(len(files), 1)
+                closed = files[0].read_bytes()
+                self.assertEqual(len(grok.posts), 1)
+                grok.posts.clear()
+                grok.timeouts.clear()
+                asyncio.run(ctx.callbacks[0]())
+                self.assertEqual(grok.posts, [])
+                self.assertEqual(files[0].read_bytes(), closed)
+
+    def test_epilogue_oserror_keeps_the_screenplay(self) -> None:
+        grok = _Grok(payload=_output("Le client demande un réceptionniste."))
+        screenplay = SCREENPLAY.encode("utf-8")
+        mark = "Résumé : ".encode()
+        real_replace = os.replace
+
+        def replace(src: str | Path, dst: str | Path) -> None:
+            if mark in Path(src).read_bytes():
+                raise OSError("épilogue")
+            real_replace(src, dst)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with _shutdown(root, grok, key="test-key") as ctx:
+                with patch.object(record.os, "replace", replace):
+                    asyncio.run(ctx.callbacks[0]())
+            files = list(root.iterdir())
+            self.assertEqual(len(files), 1)
+            data = files[0].read_bytes()
+        self.assertEqual(data, screenplay)
+        self._assert_grok_saw_screenplay(grok)
 
 
 if __name__ == "__main__":
