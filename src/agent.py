@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -43,10 +44,50 @@ INSTRUCTIONS = (
     Path(__file__).resolve().parent / "instructions.md"
 ).read_text(encoding="utf-8")
 
+_WEEKDAYS = (
+    "lundi",
+    "mardi",
+    "mercredi",
+    "jeudi",
+    "vendredi",
+    "samedi",
+    "dimanche",
+)
+_MONTHS = (
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
+)
+
+
+def instructions_for(today: date) -> str:
+    stamp = today.strftime("%d/%m/%Y")
+    spoken = f"{_WEEKDAYS[today.weekday()]} {today.day} {_MONTHS[today.month - 1]} {today.year}"
+    return (
+        f"{INSTRUCTIONS}\n\n"
+        "Date du jour\n\n"
+        f"Aujourd'hui est le {spoken} ({stamp}). "
+        "« Ce soir » et « aujourd'hui » sont cette date. "
+        "« Demain » est le lendemain. "
+        "Si le client donne un jour et un mois sans année, utilise cette année. "
+        "Si ce jour est déjà passé, utilise l'année suivante. "
+        "Appelle verifier_disponibilite_et_prix avec des dates jj/mm/aaaa "
+        "de cette année ou de la suivante.\n"
+    )
+
 
 class Receptionniste(Agent):
     def __init__(self) -> None:
-        super().__init__(instructions=INSTRUCTIONS)
+        super().__init__(instructions=instructions_for(date.today()))
         self._transfer_started = False
         self._wubook: WubookService | None = None
 
@@ -130,9 +171,11 @@ class Receptionniste(Agent):
     @function_tool(
         description=(
             "Interroge WuBook pour les chambres réelles libres entre l'arrivée et le départ. "
-            "arrivee et depart sont au format jj/mm/aaaa. Le départ est le matin du checkout, "
-            "pas une nuit facturée. adultes vaut au moins 1. enfants vaut 0 s'il n'y en a pas. "
-            "Annonce au plus 3 chambres, avec le prix total renvoyé. N'invente aucun prix."
+            "arrivee et depart sont au format jj/mm/aaaa, avec l'année de la date du jour "
+            "indiquée dans les instructions. Le départ est le matin du checkout, "
+            "pas une nuit facturée. Le client a dit un nombre de personnes : "
+            "passe-le dans adultes et 0 dans enfants, sauf s'il a distingué des enfants. "
+            "Annonce seulement les chambres renvoyées, avec le prix total. N'invente aucun prix."
         )
     )
     async def verifier_disponibilite_et_prix(
@@ -153,6 +196,8 @@ class Receptionniste(Agent):
             "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
             "prix_total_eur est le total annoncé, par exemple 120.00. "
             "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
+            "Après succès, dis « Nous allons prochainement vous envoyer un email de confirmation ». "
+            "Ne lis pas le numéro de réservation. "
             "Si la réponse contient erreur, propose le transfert vers la réception."
         )
     )

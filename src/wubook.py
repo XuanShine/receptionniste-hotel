@@ -154,8 +154,23 @@ def parse_stay(
     if end <= start:
         raise WubookError("Le départ doit être après l'arrivée.")
     if start < today:
-        raise WubookError("La date d'arrivée est dans le passé.")
+        raise WubookError(
+            "La date d'arrivée est dans le passé. "
+            f"Aujourd'hui est le {today.strftime('%d/%m/%Y')}. "
+            "Recommence avec cette année, ou l'année suivante si le jour est déjà passé."
+        )
     return Stay(start, end, adults, children)
+
+
+def occupancy_for_party(people: int) -> int | None:
+    """Une ou deux personnes → double. Trois → triple. Quatre → familiale."""
+    if people <= 2:
+        return 2
+    if people == 3:
+        return 3
+    if people == 4:
+        return 4
+    return None
 
 
 def select_offers(
@@ -164,12 +179,13 @@ def select_offers(
     rules: Mapping[int, tuple[NightRule, ...]],
     prices: Mapping[int, tuple[int, ...]],
 ) -> tuple[Offer, ...]:
-    """Chambres réelles libres chaque nuit, sans fermeture, au séjour minimum, à 45 € ou plus."""
+    """Chambres réelles libres du type qui correspond au nombre de personnes, à 45 € ou plus."""
+    wanted = occupancy_for_party(stay.people)
     chosen: list[Offer] = []
     for room in catalog:
         if room.id not in REAL_ROOM_IDS or room.virtual:
             continue
-        if room.occupancy < stay.people:
+        if wanted is None or room.occupancy != wanted:
             continue
         row = rules.get(room.id)
         if row is None or len(row) != stay.nights + 1:

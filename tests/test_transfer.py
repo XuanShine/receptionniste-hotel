@@ -1,7 +1,7 @@
 import inspect
 import sys
 import unittest
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -192,6 +192,8 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
         instructions = (SRC / "instructions.md").read_text(encoding="utf-8")
         self.assertIn("transferer_reception", instructions)
         self.assertIn(transfer.TRANSFER_PHRASE, instructions)
+        stamp = date.today().strftime("%d/%m/%Y")
+        self.assertIn(stamp, agent.Receptionniste().instructions)
 
     async def test_tool_sends_refer_to_extension_10(self) -> None:
         sip = _SipApi()

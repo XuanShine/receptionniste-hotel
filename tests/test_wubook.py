@@ -229,13 +229,6 @@ class QuoteTest(unittest.TestCase):
                     "prix_total_eur": "130.00",
                     "prix_par_nuit_eur": ["60.00", "70.00"],
                 },
-                {
-                    "id": 329667,
-                    "nom": "Triple",
-                    "capacite": 3,
-                    "prix_total_eur": "160.00",
-                    "prix_par_nuit_eur": ["80.00", "80.00"],
-                },
             ],
         )
         values = _call(wired, "fetch_rooms_values")
@@ -312,6 +305,18 @@ class QuoteTest(unittest.TestCase):
         with serve(wired) as proxy:
             result = service(proxy).disponibilite(ARRIVAL, DEPARTURE, 2, 1)
         self.assertEqual([item["id"] for item in result["chambres"]], [329667])
+
+    def test_four_people_get_the_family_room_only(self) -> None:
+        wired = catalog()
+        for item in wired.rooms:
+            if item["id"] == 329039:
+                item["name"] = "Familiale"
+                item["occupancy"] = 4
+        with serve(wired) as proxy:
+            party = service(proxy).disponibilite(ARRIVAL, DEPARTURE, 4, 0)
+            too_many = service(proxy).disponibilite(ARRIVAL, DEPARTURE, 5, 0)
+        self.assertEqual([item["id"] for item in party["chambres"]], [329039])
+        self.assertEqual(too_many["chambres"], [])
 
     def test_virtual_room_is_left_out(self) -> None:
         wired = Wired()
@@ -631,10 +636,12 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
         for fragment in (
             "verifier_disponibilite_et_prix",
             "creer_reservation",
-            "au maximum 3",
+            "Combien de personnes ?",
             "carte bancaire",
             "confirmation explicite",
-            "numéro de réservation",
+            "Est-ce que je peux avoir votre nom ?",
+            "Email pour la confirmation ?",
+            "Nous allons prochainement vous envoyer un email de confirmation",
             "poste 10",
         ):
             self.assertIn(fragment, instructions)
