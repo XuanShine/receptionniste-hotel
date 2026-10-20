@@ -1,5 +1,7 @@
 """Worker LiveKit : répond aux appels SIP. Cartesia entend et parle, Grok répond."""
 
+import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -28,6 +30,7 @@ from transfer import (
     refer_sip_participant,
     refer_target_from_env,
 )
+from wubook import WubookError, WubookService, parse_guest
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -44,6 +47,7 @@ class Receptionniste(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=INSTRUCTIONS)
         self._transfer_started = False
+        self._wubook: WubookService | None = None
 
     @function_tool(
         description=(
@@ -121,6 +125,92 @@ class Receptionniste(Agent):
             refer=refer,
             bridge=bridge if trunk_id else None,
         )
+
+    @function_tool(
+        description=(
+            "Interroge WuBook pour les chambres réelles libres entre l'arrivée et le départ. "
+            "arrivee et depart sont au format jj/mm/aaaa. Le départ est le matin du checkout, "
+            "pas une nuit facturée. adultes vaut au moins 1. enfants vaut 0 s'il n'y en a pas. "
+            "Annonce au plus 3 chambres, avec le prix total renvoyé. N'invente aucun prix."
+        )
+    )
+    async def verifier_disponibilite_et_prix(
+        self,
+        ctx: RunContext,
+        arrivee: str,
+        depart: str,
+        adultes: int,
+        enfants: int,
+    ) -> str:
+        return await self._wubook_call(
+            lambda desk: desk.disponibilite(arrivee, depart, adultes, enfants)
+        )
+
+    @function_tool(
+        description=(
+            "Crée une réservation confirmée dans WuBook après une confirmation explicite. "
+            "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
+            "prix_total_eur est le total annoncé, par exemple 120.00. "
+            "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
+            "Si la réponse contient erreur, propose le transfert vers la réception."
+        )
+    )
+    async def creer_reservation(
+        self,
+        ctx: RunContext,
+        arrivee: str,
+        depart: str,
+        chambre: int,
+        nom: str,
+        prenom: str,
+        email: str,
+        telephone: str,
+        adultes: int,
+        enfants: int,
+        prix_total_eur: str,
+        ville: str = "",
+        rue: str = "",
+        pays: str = "",
+        heure_arrivee: str = "",
+        notes: str = "",
+    ) -> str:
+        return await self._wubook_call(
+            lambda desk: desk.reserver(
+                arrival=arrivee,
+                departure=depart,
+                room_id=chambre,
+                price_total=prix_total_eur,
+                guest=parse_guest(
+                    last_name=nom,
+                    first_name=prenom,
+                    email=email,
+                    phone=telephone,
+                    city=ville,
+                    street=rue,
+                    country=pays,
+                    arrival_hour=heure_arrivee,
+                    notes=notes,
+                ),
+                adults=adultes,
+                children=enfants,
+            )
+        )
+
+    def _desk(self) -> WubookService:
+        if self._wubook is None:
+            self._wubook = WubookService.from_env(os.environ)
+        return self._wubook
+
+    async def _wubook_call(self, run) -> str:
+        try:
+            desk = self._desk()
+            result = await asyncio.to_thread(run, desk)
+        except WubookError as exc:
+            return json.dumps({"erreur": str(exc)}, ensure_ascii=False)
+        except Exception:
+            logger.exception("appel WuBook")
+            return json.dumps({"erreur": "WuBook est indisponible."}, ensure_ascii=False)
+        return json.dumps(result, ensure_ascii=False)
 
 
 server = AgentServer()
