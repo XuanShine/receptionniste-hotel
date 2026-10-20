@@ -1,3 +1,5 @@
+import inspect
+import json
 import sys
 import threading
 import unittest
@@ -580,6 +582,62 @@ def _book(
         adults=adults,
         children=children,
     )
+
+
+class AgentToolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tools_quote_and_book_and_transfer_stays(self) -> None:
+        import agent
+
+        wired = catalog()
+        with serve(wired) as proxy:
+            receptionist = agent.Receptionniste()
+            receptionist._wubook = service(proxy)
+            quoted = await receptionist.verifier_disponibilite_et_prix(
+                object(),
+                ARRIVAL,
+                DEPARTURE,
+                2,
+                0,
+            )
+            booked = await receptionist.creer_reservation(
+                object(),
+                ARRIVAL,
+                DEPARTURE,
+                329039,
+                "Martin",
+                "Léa",
+                "lea@example.com",
+                "0612345678",
+                2,
+                0,
+                "130.00",
+            )
+            failed = await receptionist.verifier_disponibilite_et_prix(
+                object(),
+                "hier",
+                DEPARTURE,
+                2,
+                0,
+            )
+
+        self.assertEqual(json.loads(quoted)["chambres"][0]["prix_total_eur"], "130.00")
+        self.assertEqual(json.loads(booked)["reservation"], "HP-2048")
+        self.assertIn("jj/mm/aaaa", json.loads(failed)["erreur"])
+        self.assertEqual(
+            list(inspect.signature(agent.Receptionniste().transferer_reception).parameters),
+            ["ctx"],
+        )
+        instructions = (SRC / "instructions.md").read_text(encoding="utf-8")
+        for fragment in (
+            "verifier_disponibilite_et_prix",
+            "creer_reservation",
+            "au maximum 3",
+            "carte bancaire",
+            "confirmation explicite",
+            "numéro de réservation",
+            "poste 10",
+        ):
+            self.assertIn(fragment, instructions)
 
 
 if __name__ == "__main__":
