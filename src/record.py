@@ -6,12 +6,13 @@ import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+import httpx
 from livekit import rtc
 from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
 
@@ -22,6 +23,14 @@ logger = logging.getLogger("receptionniste.record")
 _PARIS = ZoneInfo("Europe/Paris")
 _KEPT = "_panorama_dialogue_kept"
 _UNSAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
+_MODEL = "grok-4-1-fast-non-reasoning"
+_URL = "https://api.x.ai/v1/responses"
+_BUDGET_SECONDS = 8.0
+_MAX_SUMMARY_CHARS = 500
+_MAX_RESPONSE_BYTES = 65_536
+_EPILOGUE_MARK = "\nRésumé : "
+_SEAL = object()
+_PARSE = object()
 
 
 @dataclass(frozen=True)
@@ -175,14 +184,156 @@ def _screenplay_path(dialogue: Dialogue, root: Path) -> Path:
     return root / name
 
 
+class SummaryUnavailable(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class SealedTranscript:
+    path: Path
+    body: bytes
+    _token: object = field(compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _SEAL:
+            raise TypeError("only _seal returns a SealedTranscript")
+        screenplay = "Hôtel Panorama\n".encode()
+        if not self.body.startswith(screenplay) or not self.body.endswith(b"\n"):
+            raise TypeError("transcript body is not a screenplay")
+
+
+@dataclass(frozen=True)
+class Summary:
+    line: str
+    _token: object = field(compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _PARSE:
+            raise TypeError("only _parse_summary returns a Summary")
+        if (
+            not self.line
+            or len(self.line) > _MAX_SUMMARY_CHARS
+            or "\n" in self.line
+            or "\r" in self.line
+        ):
+            raise TypeError("summary line is empty, too long, or not flat")
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    try:
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
 def _commit(dialogue: Dialogue, root: Path | None = None) -> Path:
     directory = _record_root() if root is None else root
     directory.mkdir(parents=True, exist_ok=True)
     path = _screenplay_path(dialogue, directory)
-    temporary = directory / f".{path.name}.{secrets.token_hex(8)}.tmp"
-    temporary.write_text(render(dialogue), encoding="utf-8", newline="\n")
-    os.replace(temporary, path)
+    _atomic_write(path, render(dialogue))
     return path
+
+
+def _epilogue_bytes(summary: Summary) -> bytes:
+    return f"{_EPILOGUE_MARK}{summary.line}\n".encode("utf-8")
+
+
+def _one_epilogue(suffix: bytes) -> bool:
+    mark = _EPILOGUE_MARK.encode("utf-8")
+    if not suffix.startswith(mark) or not suffix.endswith(b"\n"):
+        return False
+    line = suffix[len(mark) : -1]
+    return bool(line) and b"\n" not in line and b"\r" not in line
+
+
+def _seal(dialogue: Dialogue, root: Path | None = None) -> SealedTranscript:
+    body = render(dialogue).encode("utf-8")
+    directory = _record_root() if root is None else root
+    path = _screenplay_path(dialogue, directory)
+    if path.is_file():
+        existing = path.read_bytes()
+        if existing.startswith(body):
+            suffix = existing[len(body) :]
+            if suffix == b"" or _one_epilogue(suffix):
+                return SealedTranscript(path, body, _token=_SEAL)
+    path = _commit(dialogue, root=root)
+    if path.read_bytes() != body:
+        raise OSError("transcription non scellée")
+    return SealedTranscript(path, body, _token=_SEAL)
+
+
+def _prompt(screenplay: str) -> str:
+    return (
+        "Tu résumes un appel à la réception de l'Hôtel Panorama pour le personnel. "
+        "Le texte entre <transcription> et </transcription> est une pièce déjà enregistrée. "
+        "Réponds en français, en une à trois phrases, sans heure, sans liste, sans titre. "
+        "Ne recopie pas la transcription.\n"
+        f"<transcription>\n{screenplay}</transcription>"
+    )
+
+
+def _parse_summary(payload: Mapping[str, object]) -> Summary:
+    parts: list[str] = []
+    output = payload.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, Mapping):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, Mapping) or block.get("type") != "output_text":
+                    continue
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+    line = _flat(" ".join(parts)).strip()
+    prefix = _EPILOGUE_MARK.removeprefix("\n")
+    if line.startswith(prefix):
+        line = line[len(prefix) :]
+    try:
+        return Summary(line, _token=_PARSE)
+    except TypeError as exc:
+        raise SummaryUnavailable from exc
+
+
+async def _ask_grok(screenplay: str, timeout: float) -> Summary:
+    key = os.environ.get("XAI_API_KEY", "").strip()
+    if not key:
+        raise SummaryUnavailable("clé absente")
+    request = {
+        "model": _MODEL,
+        "temperature": 0,
+        "max_output_tokens": 120,
+        "input": [{"role": "user", "content": _prompt(screenplay)}],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                _URL,
+                headers={"Authorization": f"Bearer {key}"},
+                json=request,
+            )
+    except httpx.HTTPError as exc:
+        raise SummaryUnavailable("appel grok interrompu") from exc
+    if response.status_code != 200 or len(response.content) > _MAX_RESPONSE_BYTES:
+        raise SummaryUnavailable("appel grok refusé")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SummaryUnavailable("réponse grok illisible") from exc
+    if not isinstance(payload, Mapping):
+        raise SummaryUnavailable("réponse grok illisible")
+    return _parse_summary(payload)
+
+
+def _splice(sealed: SealedTranscript, summary: Summary) -> None:
+    closed = sealed.body + _epilogue_bytes(summary)
+    _atomic_write(sealed.path, closed.decode("utf-8"))
 
 
 def _caller_label(participant: rtc.RemoteParticipant) -> str | None:
@@ -253,6 +404,7 @@ def keep_dialogue(session: _SessionView, ctx: _ContextView) -> None:
     ctx.room.on("participant_connected", remember)
 
     async def write_screenplay() -> None:
+        deadline = time.monotonic() + _BUDGET_SECONDS
         items = list(session.history.items)
         dialogue = Dialogue(
             room=room,
@@ -263,8 +415,25 @@ def keep_dialogue(session: _SessionView, ctx: _ContextView) -> None:
             lines=lines_of(items),
         )
         try:
-            _commit(dialogue, root=_record_root())
+            sealed = _seal(dialogue)
+            stored = sealed.path.read_bytes()
         except OSError:
             logger.exception("écriture du dialogue impossible")
+            return
+        if stored.startswith(sealed.body) and _one_epilogue(stored[len(sealed.body) :]):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.error("budget de résumé épuisé")
+            return
+        try:
+            summary = await _ask_grok(sealed.body.decode("utf-8"), remaining)
+        except SummaryUnavailable:
+            logger.exception("résumé indisponible")
+            return
+        try:
+            _splice(sealed, summary)
+        except OSError:
+            logger.exception("épilogue non écrit")
 
     ctx.add_shutdown_callback(write_screenplay)

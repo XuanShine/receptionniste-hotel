@@ -5,6 +5,7 @@ description = "Réception IA du Panorama Hotel"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "livekit-agents[xai]~=1.8",
     "python-dotenv>=1.2.4",
 ]
