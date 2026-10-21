@@ -24,6 +24,7 @@ from transfer import (
     RECEPTION_PHONE,
     TransferOutcome,
     bridge_sip_participant,
+    caller_phone,
     dial_number,
     find_sip_caller,
     outbound_trunk_id,
@@ -69,7 +70,7 @@ _MONTHS = (
 )
 
 
-def instructions_for(today: date) -> str:
+def instructions_for(today: date, caller_phone: str | None = None) -> str:
     stamp = today.strftime("%d/%m/%Y")
     spoken = f"{_WEEKDAYS[today.weekday()]} {today.day} {_MONTHS[today.month - 1]} {today.year}"
     return (
@@ -82,12 +83,27 @@ def instructions_for(today: date) -> str:
         "Si ce jour est déjà passé, utilise l'année suivante. "
         "Appelle verifier_disponibilite_et_prix avec des dates jj/mm/aaaa "
         "de cette année ou de la suivante.\n"
+        f"{_caller_note(caller_phone)}"
+    )
+
+
+def _caller_note(caller_phone: str | None) -> str:
+    if caller_phone is None:
+        return (
+            "\n\nNuméro de l'appelant\n\n"
+            "Le numéro de l'appelant est inconnu. Demande « Téléphone ? »."
+        )
+    return (
+        "\n\nNuméro de l'appelant\n\n"
+        f"Le numéro de l'appelant est {caller_phone}. "
+        "Demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». "
+        "Ne le passe à creer_reservation qu'après un oui."
     )
 
 
 class Receptionniste(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions=instructions_for(date.today()))
+    def __init__(self, caller_phone: str | None = None) -> None:
+        super().__init__(instructions=instructions_for(date.today(), caller_phone))
         self._transfer_started = False
         self._wubook: WubookService | None = None
 
@@ -196,6 +212,10 @@ class Receptionniste(Agent):
             "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
             "prix_total_eur est le total annoncé, par exemple 120.00. "
             "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
+            "telephone est le numéro confirmé. "
+            "Si le client a accepté le numéro de l'appelant indiqué dans les instructions, "
+            "passe ce numéro. S'il a refusé, ou si ce numéro est inconnu, "
+            "passe le numéro qu'il a dicté. "
             "Après succès, dis « Nous allons prochainement vous envoyer un email de confirmation ». "
             "Ne lis pas le numéro de réservation. "
             "Si la réponse contient erreur, propose le transfert vers la réception."
@@ -262,11 +282,20 @@ class Receptionniste(Agent):
 server = AgentServer()
 
 
+async def incoming_caller_phone(ctx: JobContext) -> str | None:
+    """Lit le numéro une fois la room connectée. La console n'a pas d'appelant SIP."""
+    if ctx.is_fake_job():
+        return None
+    await ctx.connect()
+    return caller_phone(ctx.room.remote_participants.values())
+
+
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(llm=xai.realtime.RealtimeModel(voice=GROK_VOICE))
     keep_dialogue(session, ctx)
-    await session.start(room=ctx.room, agent=Receptionniste())
+    phone = await incoming_caller_phone(ctx)
+    await session.start(room=ctx.room, agent=Receptionniste(caller_phone=phone))
     await session.generate_reply(
         instructions="Hôtel Panorama Bonjour, comment puis-je vous aider ?",
     )

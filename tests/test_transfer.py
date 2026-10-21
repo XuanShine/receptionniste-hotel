@@ -160,6 +160,60 @@ class CallerPhoneTest(unittest.TestCase):
         self.assertIsNone(transfer.caller_phone([caller]))
 
 
+class _CallRoom:
+    def __init__(self, participants: list[_Numbered]) -> None:
+        self.remote_participants = {person.identity: person for person in participants}
+
+
+class _PhoneJob:
+    def __init__(self, *, fake: bool, participants: list[_Numbered]) -> None:
+        self._fake = fake
+        self.connected = False
+        self.room = _CallRoom(participants)
+
+    def is_fake_job(self) -> bool:
+        return self._fake
+
+    async def connect(self) -> None:
+        self.connected = True
+
+
+class IncomingCallerPhoneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_console_has_no_caller_number(self) -> None:
+        ctx = _PhoneJob(
+            fake=True,
+            participants=[_sip({"sip.phoneNumber": "+33612345678"})],
+        )
+        self.assertIsNone(await agent.incoming_caller_phone(ctx))
+        self.assertFalse(ctx.connected)
+
+    async def test_call_reads_the_number_after_connect(self) -> None:
+        ctx = _PhoneJob(
+            fake=False,
+            participants=[_sip({"sip.phoneNumber": "tel:+33612345678"})],
+        )
+        self.assertEqual(await agent.incoming_caller_phone(ctx), "+33612345678")
+        self.assertTrue(ctx.connected)
+
+
+class CallerInstructionsTest(unittest.TestCase):
+    def test_known_number_is_offered(self) -> None:
+        receptionist = agent.Receptionniste(caller_phone="+33612345678")
+        text = receptionist.instructions
+        self.assertIn("+33612345678", text)
+        self.assertIn(
+            "Est-ce que je peux utiliser le numéro depuis lequel vous appelez ?",
+            text,
+        )
+
+    def test_unknown_number_asks_for_the_phone(self) -> None:
+        receptionist = agent.Receptionniste()
+        text = receptionist.instructions
+        self.assertIn("Le numéro de l'appelant est inconnu.", text)
+        self.assertIn("Téléphone ?", text)
+        self.assertNotIn("0033422480521", text)
+
+
 class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
     async def test_says_the_phrase_then_refers(self) -> None:
         said: list[str] = []

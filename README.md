@@ -71,6 +71,8 @@ uv run python src/agent.py dev
 
 L'agent accueille en français. Pour un séjour daté, il interroge WuBook. Il n'annonce aucun prix que l'outil n'a pas renvoyé.
 
+Au démarrage d'un appel, l'agent lit `sip.phoneNumber` sur le participant SIP. Un attribut vide ou absent est un numéro inconnu. Le numéro de l'hôtel `0033422480521` l'est aussi, ainsi que `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:`. L'agent demande alors le téléphone. Si le numéro est connu, il demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `creer_reservation` qu'après un oui.
+
 Si l'appelant demande à parler à un réceptionniste, l'agent dit « Très bien, je vous transfère à mon collègue. » puis envoie un SIP REFER vers le poste 10. La cible par défaut est `sip:10@hotelpanorama.on3cx.fr`. LiveKit joue la tonalité d'attente et laisse sonner 60 secondes.
 
 | Variable | Rôle |
@@ -103,6 +105,8 @@ Dans l'admin 3CX, créer un trunk **Generic SIP, IP-based, sans registration** :
 - Codecs : **PCMU** en premier, PCMA ensuite. Désactiver G.729 et G.722.
 - Caller ID sortant : numéro d'origine (`$OriginatorCallerID`), pour que LiveKit voie l'appelant.
 - Route : le DID de la réception, ou une extension de test, est renvoyé vers ce trunk.
+
+Le trunk LiveKitGrok envoie le numéro du client dans le From et le P-Asserted-Identity. LiveKit le recopie dans `sip.phoneNumber`.
 
 L'IP que 3CX présente à LiveKit est l'IP publique du PBX, pas l'adresse du LAN. C'est celle de `SIP_ALLOWED_ADDRESSES`.
 

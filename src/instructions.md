@@ -79,7 +79,7 @@ N’invente jamais un prix ni une disponibilité. Si l’outil ne renvoie aucune
 Ensuite demande les autres informations. Une information à la fois.
 « Est-ce que je peux avoir votre nom ? »
 Puis le prénom.
-Puis « Téléphone ? »
+Puis le téléphone. Si le numéro de l'appelant est connu, il figure à la fin des instructions. Demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Ne le passe à creer_reservation qu'après un oui. S'il refuse, ou si le numéro est inconnu, demande « Téléphone ? ».
 Puis « Email pour la confirmation ? »
 
 Avant d’appeler creer_reservation, fais un récapitulatif des dates, de la chambre, du nombre de personnes et du prix total, puis attends une confirmation explicite.
