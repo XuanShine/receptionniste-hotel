@@ -45,13 +45,26 @@ uv sync
 
 ## Trunk et dispatch
 
-Le script crée le trunk et la règle s'ils n'existent pas. Il ne supprime ni ne modifie une ressource déjà présente.
+Le script crée le trunk et la règle s'ils n'existent pas. Il ne supprime rien. Sur un trunk déjà présent, il ne change ni l'allowlist ni les numéros. Il pose `headers_to_attributes` s'il manque, par `UpdateSIPInboundTrunk`. Un second passage ne rappelle pas l'API.
 
 ```bash
 uv run python src/provision_sip.py
 ```
 
-Il affiche l'identifiant du trunk, l'identifiant de la règle, et l'hôte SIP à coller dans 3CX. Pour `wss://sous-domaine.livekit.cloud`, l'hôte est `sous-domaine.sip.livekit.cloud`, port `5060`.
+Cette commande met à jour le trunk entrant nommé `SIP_TRUNK_NAME`. En production, c'est `ST_BxA4aAxSS3y4`. Le mappage est `Remote-Party-ID` vers `sip.rpid` et `P-Asserted-Identity` vers `sip.pai`. Le script affiche l'identifiant du trunk, l'identifiant de la règle, et l'hôte SIP à coller dans 3CX. Pour `wss://sous-domaine.livekit.cloud`, l'hôte est `sous-domaine.sip.livekit.cloud`, port `5060`.
+
+La CLI `lk` n'a pas de flag pour ce champ. Un fichier JSON remplace tout le trunk. Le fichier doit donc reprendre les champs déjà en place, dont `numbers` et `allowed_addresses`. Le script Python ci-dessus fait la mise à jour sans les effacer.
+
+```bash
+lk sip inbound update --id ST_BxA4aAxSS3y4 - <<'EOF'
+{
+  "headers_to_attributes": {
+    "Remote-Party-ID": "sip.rpid",
+    "P-Asserted-Identity": "sip.pai"
+  }
+}
+EOF
+```
 
 La règle ouvre une room `call-…` par appel et dispatche l'agent `AGENT_NAME` sur ce trunk.
 
@@ -71,7 +84,7 @@ uv run python src/agent.py dev
 
 L'agent accueille en français. Pour un séjour daté, il interroge WuBook. Il n'annonce aucun prix que l'outil n'a pas renvoyé.
 
-Au démarrage d'un appel, l'agent lit `sip.phoneNumber` sur le participant SIP. Un attribut vide ou absent est un numéro inconnu. Le numéro de l'hôtel `0033422480521` l'est aussi, ainsi que `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:`. L'agent demande alors le téléphone. Si le numéro est connu, il demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `creer_reservation` qu'après un oui.
+Au démarrage d'un appel, l'agent lit le display name entre guillemets de `sip.rpid`, puis celui de `sip.pai`, puis `sip.phoneNumber`. Une valeur vide, `anonymous`, ou le numéro de l'hôtel `0033422480521` est ignorée. Les formes `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:` comptent aussi comme l'hôtel. `0651216491` et `+33651216491` sont des numéros de client. S'il reste un numéro, l'agent demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `creer_reservation` qu'après un oui. Sinon il demande le téléphone.
 
 Si l'appelant demande à parler à un réceptionniste, l'agent dit « Très bien, je vous transfère à mon collègue. » puis envoie un SIP REFER vers le poste 10. La cible par défaut est `sip:10@hotelpanorama.on3cx.fr`. LiveKit joue la tonalité d'attente et laisse sonner 60 secondes.
 
@@ -106,7 +119,7 @@ Dans l'admin 3CX, créer un trunk **Generic SIP, IP-based, sans registration** :
 - Caller ID sortant : numéro d'origine (`$OriginatorCallerID`), pour que LiveKit voie l'appelant.
 - Route : le DID de la réception, ou une extension de test, est renvoyé vers ce trunk.
 
-Le trunk LiveKitGrok envoie le numéro du client dans le From et le P-Asserted-Identity. LiveKit le recopie dans `sip.phoneNumber`.
+3CX force la partie user à `0033422480521`, le numéro principal du trunk. Le numéro du client est le display name de `Remote-Party-ID` et de `P-Asserted-Identity`. LiveKit ne le copie dans `sip.rpid` et `sip.pai` qu'après le mappage du trunk.
 
 L'IP que 3CX présente à LiveKit est l'IP publique du PBX, pas l'adresse du LAN. C'est celle de `SIP_ALLOWED_ADDRESSES`.
 

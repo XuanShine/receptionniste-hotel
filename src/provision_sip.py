@@ -13,6 +13,10 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 ROOM_PREFIX = "call-"
 PAGE_SIZE = 100
+CALLER_HEADERS = {
+    "Remote-Party-ID": "sip.rpid",
+    "P-Asserted-Identity": "sip.pai",
+}
 
 
 def require(name: str) -> str:
@@ -77,6 +81,24 @@ async def list_dispatch_rules(lkapi: api.LiveKitAPI) -> list[api.SIPDispatchRule
     return rules
 
 
+def caller_headers_ready(trunk: api.SIPInboundTrunkInfo) -> bool:
+    return all(
+        trunk.headers_to_attributes.get(header) == attribute
+        for header, attribute in CALLER_HEADERS.items()
+    )
+
+
+def with_caller_headers(trunk: api.SIPInboundTrunkInfo) -> api.SIPInboundTrunkInfo:
+    """Copie le trunk et pose le mappage. L'id est vidé pour un replace."""
+    updated = api.SIPInboundTrunkInfo()
+    updated.CopyFrom(trunk)
+    updated.ClearField("sip_trunk_id")
+    updated.ClearField("created_at")
+    updated.ClearField("updated_at")
+    updated.headers_to_attributes.update(CALLER_HEADERS)
+    return updated
+
+
 def warn_if_drift(trunk: api.SIPInboundTrunkInfo, allowed: list[str], numbers: list[str]) -> None:
     if set(trunk.allowed_addresses) != set(allowed):
         print("Le trunk existant a une allowlist différente. Il n'est pas modifié.")
@@ -121,12 +143,20 @@ async def main() -> None:
                         name=trunk_name,
                         numbers=numbers,
                         allowed_addresses=allowed,
+                        headers_to_attributes=dict(CALLER_HEADERS),
                     )
                 )
             )
             trunk_state = "créé"
         else:
             warn_if_drift(trunk, allowed, numbers)
+            if not caller_headers_ready(trunk):
+                trunk_id = trunk.sip_trunk_id
+                trunk = await lkapi.sip.update_inbound_trunk(
+                    trunk_id,
+                    with_caller_headers(trunk),
+                )
+                trunk_state = "mis à jour"
 
         rules = await list_dispatch_rules(lkapi)
         rule = next((item for item in rules if rule_dispatches(item, agent_name)), None)
@@ -157,6 +187,7 @@ async def main() -> None:
 
         host = sip_host(livekit_url)
         print(f"Trunk : {trunk.sip_trunk_id} ({trunk_state}) {trunk.name}")
+        print("En-têtes : Remote-Party-ID vers sip.rpid, P-Asserted-Identity vers sip.pai")
         print(f"Règle : {rule.sip_dispatch_rule_id} ({rule_state}) {rule.name}")
         if host:
             print(f"Hôte SIP 3CX : {host} port 5060")

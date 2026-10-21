@@ -154,6 +154,69 @@ class CallerPhoneTest(unittest.TestCase):
             "0612345678",
         )
 
+    def test_real_invite_uses_the_remote_party_display_name(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": (
+                    '"0651216491"'
+                    "<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>;party=calling"
+                ),
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "0651216491")
+
+    def test_asserted_identity_display_name_when_remote_party_is_missing(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "0651216491")
+
+    def test_plus_display_name_is_kept(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": (
+                    '"+33651216491"'
+                    "<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>;party=calling"
+                ),
+                "sip.pai": '"anonymous"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "+33651216491")
+
+    def test_hotel_or_anonymous_display_name_falls_through(self) -> None:
+        hotel_rpid = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": '"0033422480521"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"+33651216491"<sip:anonymous>',
+            }
+        )
+        anonymous_rpid = _sip(
+            {
+                "sip.phoneNumber": "+33422480521",
+                "sip.rpid": '"anonymous"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([hotel_rpid]), "+33651216491")
+        self.assertEqual(transfer.caller_phone([anonymous_rpid]), "0651216491")
+
+    def test_hotel_headers_stay_unknown(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": '"0422480521"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"anonymous"<sip:anonymous>',
+            }
+        )
+        self.assertIsNone(transfer.caller_phone([caller]))
+
     def test_hotel_number_does_not_change_the_transfer_identity(self) -> None:
         caller = _sip({"sip.phoneNumber": "0033422480521"})
         self.assertEqual(transfer.find_sip_caller([caller]), "sip-caller")

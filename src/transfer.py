@@ -94,26 +94,48 @@ def find_sip_caller(participants: Iterable[_SipLike]) -> str | None:
 
 _HOTEL_NUMBER = "0033422480521"
 _SCHEME = re.compile(r"^(?:sip|tel):", re.IGNORECASE)
+_QUOTED_NAME = re.compile(r'"([^"]*)"')
+_NUMBER_SOURCES = ("sip.rpid", "sip.pai", "sip.phoneNumber")
 
 
 def caller_phone(participants: Iterable[object]) -> str | None:
-    """Numéro sip.phoneNumber de l'appelant SIP, ou None s'il est absent ou celui de l'hôtel."""
+    """Numéro du client, ou None s'il est absent, anonyme, ou celui de l'hôtel.
+
+    Le display name de sip.rpid gagne, puis celui de sip.pai, puis sip.phoneNumber.
+    """
     for participant in participants:
         if getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
             continue
-        number = _presented_number(_phone_attribute(participant))
-        if number is None or _is_hotel(number):
-            return None
-        return number
+        for raw in _caller_sources(participant):
+            number = _usable_number(raw)
+            if number is not None:
+                return number
+        return None
     return None
 
 
-def _phone_attribute(participant: object) -> str:
+def _caller_sources(participant: object) -> tuple[str, str, str]:
+    attributes = _attributes(participant)
+    rpid, pai, phone = (_text(attributes.get(key, "")) for key in _NUMBER_SOURCES)
+    return (_quoted_name(rpid), _quoted_name(pai), phone)
+
+
+def _attributes(participant: object) -> Mapping[str, str]:
     attributes = getattr(participant, "attributes", None)
     if not isinstance(attributes, Mapping):
-        return ""
-    value = attributes.get("sip.phoneNumber", "")
+        return {}
+    return attributes
+
+
+def _text(value: object) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _quoted_name(header: str) -> str:
+    match = _QUOTED_NAME.search(header)
+    if match is None:
+        return ""
+    return match.group(1).strip()
 
 
 def _presented_number(raw: str) -> str | None:
@@ -125,6 +147,13 @@ def _presented_number(raw: str) -> str | None:
     if not text or not any(ch.isdigit() for ch in text):
         return None
     return text
+
+
+def _usable_number(raw: str) -> str | None:
+    number = _presented_number(raw)
+    if number is None or number.casefold() == "anonymous" or _is_hotel(number):
+        return None
+    return number
 
 
 def _is_hotel(number: str) -> bool:
