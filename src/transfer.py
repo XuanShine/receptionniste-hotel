@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Protocol
@@ -90,6 +90,57 @@ def find_sip_caller(participants: Iterable[_SipLike]) -> str | None:
         if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP and participant.identity:
             return participant.identity
     return None
+
+
+_HOTEL_NUMBER = "0033422480521"
+_SCHEME = re.compile(r"^(?:sip|tel):", re.IGNORECASE)
+
+
+def caller_phone(participants: Iterable[object]) -> str | None:
+    """Numéro sip.phoneNumber de l'appelant SIP, ou None s'il est absent ou celui de l'hôtel."""
+    for participant in participants:
+        if getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            continue
+        number = _presented_number(_phone_attribute(participant))
+        if number is None or _is_hotel(number):
+            return None
+        return number
+    return None
+
+
+def _phone_attribute(participant: object) -> str:
+    attributes = getattr(participant, "attributes", None)
+    if not isinstance(attributes, Mapping):
+        return ""
+    value = attributes.get("sip.phoneNumber", "")
+    return value if isinstance(value, str) else ""
+
+
+def _presented_number(raw: str) -> str | None:
+    text = raw.strip()
+    if not text:
+        return None
+    text = _SCHEME.sub("", text, count=1).strip()
+    text = text.split("@", 1)[0].strip()
+    if not text or not any(ch.isdigit() for ch in text):
+        return None
+    return text
+
+
+def _is_hotel(number: str) -> bool:
+    return _canonical(number) == _canonical(_HOTEL_NUMBER)
+
+
+def _canonical(number: str) -> str:
+    body = _SCHEME.sub("", number.strip(), count=1).split("@", 1)[0].strip()
+    digits = "".join(ch for ch in body if ch.isdigit())
+    if body.startswith("+") or digits.startswith("00"):
+        if digits.startswith("00"):
+            digits = digits[2:]
+        return digits
+    if len(digits) == 10 and digits.startswith("0"):
+        return "33" + digits[1:]
+    return digits
 
 
 def outbound_trunk_id() -> str:

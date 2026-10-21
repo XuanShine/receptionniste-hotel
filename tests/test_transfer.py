@@ -103,6 +103,63 @@ class FindCallerTest(unittest.TestCase):
         self.assertEqual(transfer.find_sip_caller(participants), "sip-caller")
 
 
+class _Numbered:
+    def __init__(self, kind: int, attributes: dict[str, str] | None) -> None:
+        self.kind = kind
+        self.identity = "sip-caller"
+        if attributes is not None:
+            self.attributes = attributes
+
+
+def _sip(attributes: dict[str, str] | None) -> _Numbered:
+    return _Numbered(rtc.ParticipantKind.PARTICIPANT_KIND_SIP, attributes)
+
+
+class CallerPhoneTest(unittest.TestCase):
+    def test_missing_attribute_is_unknown(self) -> None:
+        self.assertIsNone(transfer.caller_phone([_sip(None)]))
+        self.assertIsNone(transfer.caller_phone([_sip({})]))
+
+    def test_empty_attribute_is_unknown(self) -> None:
+        self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": ""})]))
+        self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": "   "})]))
+
+    def test_hotel_number_is_unknown(self) -> None:
+        raw_numbers = (
+            "0033422480521",
+            "+33422480521",
+            "0422480521",
+            "sip:+33422480521",
+            "tel:0422480521",
+            "sip:0033422480521",
+            "tel:+33422480521",
+            "SIP:0033422480521",
+            "sip:+33422480521@hotelpanorama.on3cx.fr",
+        )
+        for raw in raw_numbers:
+            with self.subTest(raw=raw):
+                self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": raw})]))
+
+    def test_real_number(self) -> None:
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "+33612345678"})]),
+            "+33612345678",
+        )
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "sip:+33612345678"})]),
+            "+33612345678",
+        )
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "tel:0612345678"})]),
+            "0612345678",
+        )
+
+    def test_hotel_number_does_not_change_the_transfer_identity(self) -> None:
+        caller = _sip({"sip.phoneNumber": "0033422480521"})
+        self.assertEqual(transfer.find_sip_caller([caller]), "sip-caller")
+        self.assertIsNone(transfer.caller_phone([caller]))
+
+
 class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
     async def test_says_the_phrase_then_refers(self) -> None:
         said: list[str] = []
