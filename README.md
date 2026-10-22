@@ -86,6 +86,8 @@ L'agent accueille en français. Pour un séjour daté, il interroge WuBook. Il n
 
 Au démarrage d'un appel, l'agent lit le display name entre guillemets de `sip.rpid`, puis celui de `sip.pai`, puis `sip.phoneNumber`. Une valeur vide, `anonymous`, ou le numéro de l'hôtel `0033422480521` est ignorée. Les formes `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:` comptent aussi comme l'hôtel. `0651216491` et `+33651216491` sont des numéros de client. S'il reste un numéro, l'agent demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `creer_reservation` qu'après un oui. Sinon il demande le téléphone.
 
+Pour une question sur l'hôtel ou Grasse qui n'est pas dans les instructions, l'agent dit « Je regarde ça. » et appelle l'API xAI avec l'outil `web_search`. Le délai est de 8 secondes. Si la recherche échoue, il propose un collègue.
+
 Si l'appelant demande à parler à un réceptionniste, l'agent dit « Très bien, je vous transfère à mon collègue. » puis envoie un SIP REFER vers le poste 10. La cible par défaut est `sip:10@hotelpanorama.on3cx.fr`. LiveKit joue la tonalité d'attente et laisse sonner 60 secondes.
 
 | Variable | Rôle |

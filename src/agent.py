@@ -20,6 +20,7 @@ from livekit.agents.llm import ToolResult
 from livekit.plugins import xai
 
 from record import keep_dialogue
+from search import WAIT_PHRASE, web_answer
 from transfer import (
     RECEPTION_PHONE,
     TransferOutcome,
@@ -261,6 +262,23 @@ class Receptionniste(Agent):
                 children=enfants,
             )
         )
+
+    @function_tool(
+        description=(
+            "Cherche sur internet une information sur l'hôtel ou Grasse "
+            "qui n'est pas dans les instructions. "
+            "Accès, transports, événements, musées, restaurants, météo. "
+            "Pas de prix ni de disponibilité de l'hôtel. "
+            "Pas de sujet hors de l'hôtel et de Grasse. "
+            "question est la question du client."
+        )
+    )
+    async def rechercher_internet(self, ctx: RunContext, question: str) -> str:
+        try:
+            ctx.session.say(WAIT_PHRASE, allow_interruptions=True)
+        except Exception:
+            logger.exception("phrase d'attente non jouée")
+        return await web_answer(question)
 
     def _desk(self) -> WubookService:
         if self._wubook is None:
