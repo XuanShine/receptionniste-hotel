@@ -103,6 +103,180 @@ class FindCallerTest(unittest.TestCase):
         self.assertEqual(transfer.find_sip_caller(participants), "sip-caller")
 
 
+class _Numbered:
+    def __init__(self, kind: int, attributes: dict[str, str] | None) -> None:
+        self.kind = kind
+        self.identity = "sip-caller"
+        if attributes is not None:
+            self.attributes = attributes
+
+
+def _sip(attributes: dict[str, str] | None) -> _Numbered:
+    return _Numbered(rtc.ParticipantKind.PARTICIPANT_KIND_SIP, attributes)
+
+
+class CallerPhoneTest(unittest.TestCase):
+    def test_missing_attribute_is_unknown(self) -> None:
+        self.assertIsNone(transfer.caller_phone([_sip(None)]))
+        self.assertIsNone(transfer.caller_phone([_sip({})]))
+
+    def test_empty_attribute_is_unknown(self) -> None:
+        self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": ""})]))
+        self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": "   "})]))
+
+    def test_hotel_number_is_unknown(self) -> None:
+        raw_numbers = (
+            "0033422480521",
+            "+33422480521",
+            "0422480521",
+            "sip:+33422480521",
+            "tel:0422480521",
+            "sip:0033422480521",
+            "tel:+33422480521",
+            "SIP:0033422480521",
+            "sip:+33422480521@hotelpanorama.on3cx.fr",
+        )
+        for raw in raw_numbers:
+            with self.subTest(raw=raw):
+                self.assertIsNone(transfer.caller_phone([_sip({"sip.phoneNumber": raw})]))
+
+    def test_real_number(self) -> None:
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "+33612345678"})]),
+            "+33612345678",
+        )
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "sip:+33612345678"})]),
+            "+33612345678",
+        )
+        self.assertEqual(
+            transfer.caller_phone([_sip({"sip.phoneNumber": "tel:0612345678"})]),
+            "0612345678",
+        )
+
+    def test_real_invite_uses_the_remote_party_display_name(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": (
+                    '"0651216491"'
+                    "<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>;party=calling"
+                ),
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "0651216491")
+
+    def test_asserted_identity_display_name_when_remote_party_is_missing(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "0651216491")
+
+    def test_plus_display_name_is_kept(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": (
+                    '"+33651216491"'
+                    "<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>;party=calling"
+                ),
+                "sip.pai": '"anonymous"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([caller]), "+33651216491")
+
+    def test_hotel_or_anonymous_display_name_falls_through(self) -> None:
+        hotel_rpid = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": '"0033422480521"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"+33651216491"<sip:anonymous>',
+            }
+        )
+        anonymous_rpid = _sip(
+            {
+                "sip.phoneNumber": "+33422480521",
+                "sip.rpid": '"anonymous"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"0651216491"<sip:anonymous>',
+            }
+        )
+        self.assertEqual(transfer.caller_phone([hotel_rpid]), "+33651216491")
+        self.assertEqual(transfer.caller_phone([anonymous_rpid]), "0651216491")
+
+    def test_hotel_headers_stay_unknown(self) -> None:
+        caller = _sip(
+            {
+                "sip.phoneNumber": "0033422480521",
+                "sip.rpid": '"0422480521"<sip:0033422480521@65m77j3flj8.sip.livekit.cloud:5060>',
+                "sip.pai": '"anonymous"<sip:anonymous>',
+            }
+        )
+        self.assertIsNone(transfer.caller_phone([caller]))
+
+    def test_hotel_number_does_not_change_the_transfer_identity(self) -> None:
+        caller = _sip({"sip.phoneNumber": "0033422480521"})
+        self.assertEqual(transfer.find_sip_caller([caller]), "sip-caller")
+        self.assertIsNone(transfer.caller_phone([caller]))
+
+
+class _CallRoom:
+    def __init__(self, participants: list[_Numbered]) -> None:
+        self.remote_participants = {person.identity: person for person in participants}
+
+
+class _PhoneJob:
+    def __init__(self, *, fake: bool, participants: list[_Numbered]) -> None:
+        self._fake = fake
+        self.connected = False
+        self.room = _CallRoom(participants)
+
+    def is_fake_job(self) -> bool:
+        return self._fake
+
+    async def connect(self) -> None:
+        self.connected = True
+
+
+class IncomingCallerPhoneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_console_has_no_caller_number(self) -> None:
+        ctx = _PhoneJob(
+            fake=True,
+            participants=[_sip({"sip.phoneNumber": "+33612345678"})],
+        )
+        self.assertIsNone(await agent.incoming_caller_phone(ctx))
+        self.assertFalse(ctx.connected)
+
+    async def test_call_reads_the_number_after_connect(self) -> None:
+        ctx = _PhoneJob(
+            fake=False,
+            participants=[_sip({"sip.phoneNumber": "tel:+33612345678"})],
+        )
+        self.assertEqual(await agent.incoming_caller_phone(ctx), "+33612345678")
+        self.assertTrue(ctx.connected)
+
+
+class CallerInstructionsTest(unittest.TestCase):
+    def test_known_number_is_offered(self) -> None:
+        receptionist = agent.Receptionniste(caller_phone="+33612345678")
+        text = receptionist.instructions
+        self.assertIn("+33612345678", text)
+        self.assertIn(
+            "Est-ce que je peux utiliser le numéro depuis lequel vous appelez ?",
+            text,
+        )
+
+    def test_unknown_number_asks_for_the_phone(self) -> None:
+        receptionist = agent.Receptionniste()
+        text = receptionist.instructions
+        self.assertIn("Le numéro de l'appelant est inconnu.", text)
+        self.assertIn("Quel numéro de téléphone pour vous joindre ?", text)
+        self.assertNotIn("0033422480521", text)
+
+
 class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
     async def test_says_the_phrase_then_refers(self) -> None:
         said: list[str] = []
@@ -146,7 +320,7 @@ class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(called)
         self.assertFalse(outcome.connected)
-        self.assertIn(transfer.RECEPTION_PHONE, outcome.result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, outcome.result); self.assertIn("message", outcome.result)
 
     async def test_refer_failure_bridges_when_a_trunk_exists(self) -> None:
         bridged = False
@@ -178,7 +352,7 @@ class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(outcome.connected)
-        self.assertIn(transfer.RECEPTION_PHONE, outcome.result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, outcome.result); self.assertIn("message", outcome.result)
 
 
 async def _refuse(identity: str, target: str) -> None:
@@ -228,7 +402,7 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
             second = await receptionist.transferer_reception(_Ctx())
 
         self.assertIsInstance(first, str)
-        self.assertIn(transfer.RECEPTION_PHONE, first)
+        self.assertNotIn(transfer.RECEPTION_PHONE, first); self.assertIn("message", first)
         self.assertIsInstance(second, str)
         self.assertEqual(len(sip.refers), 2)
 
@@ -245,7 +419,7 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sip.refers, [])
         self.assertIsInstance(result, str)
-        self.assertIn(transfer.RECEPTION_PHONE, result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, result); self.assertIn("message", result)
 
     async def test_refused_refer_dials_extension_10(self) -> None:
         sip = _SipApi(refer_error=RuntimeError("403"))

@@ -627,6 +627,7 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(json.loads(quoted)["chambres"][0]["prix_total_eur"], "130.00")
         self.assertEqual(json.loads(booked)["reservation"], "HP-2048")
+        self.assertEqual(_call(wired, "new_reservation")[5]["phone"], "0612345678")
         self.assertIn("jj/mm/aaaa", json.loads(failed)["erreur"])
         self.assertEqual(
             list(inspect.signature(agent.Receptionniste().transferer_reception).parameters),
@@ -640,11 +641,47 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
             "carte bancaire",
             "confirmation explicite",
             "Est-ce que je peux avoir votre nom ?",
+            "Est-ce que je peux utiliser le numéro depuis lequel vous appelez ?",
+            "Quel numéro de téléphone pour vous joindre ?",
             "Email pour la confirmation ?",
-            "Nous allons prochainement vous envoyer un email de confirmation",
+            "Un de nos réceptionnistes va vérifier votre réservation",
             "poste 10",
         ):
             self.assertIn(fragment, instructions)
+
+    async def test_caller_phone_reaches_the_reservation(self) -> None:
+        import agent
+        import transfer
+        from livekit import rtc
+
+        class _Caller:
+            def __init__(self) -> None:
+                self.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                self.identity = "sip-caller"
+                self.attributes = {"sip.phoneNumber": "sip:+33601020304"}
+
+        number = transfer.caller_phone([_Caller()])
+        self.assertEqual(number, "+33601020304")
+        wired = catalog()
+        with serve(wired) as proxy:
+            receptionist = agent.Receptionniste(caller_phone=number)
+            receptionist._wubook = service(proxy)
+            self.assertIn(number, receptionist.instructions)
+            await receptionist.creer_reservation(
+                object(),
+                ARRIVAL,
+                DEPARTURE,
+                329039,
+                "Martin",
+                "Léa",
+                "lea@example.com",
+                number,
+                2,
+                0,
+                "130.00",
+            )
+
+        self.assertEqual(_call(wired, "new_reservation")[5]["phone"], "+33601020304")
 
 
 if __name__ == "__main__":
