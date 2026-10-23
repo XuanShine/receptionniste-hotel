@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.plugins import xai
 
+from knowledge import KNOWLEDGE_TOOLS
+
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "receptionniste")
@@ -19,7 +21,8 @@ INSTRUCTIONS = (
 
 class Receptionniste(Agent):
     def __init__(self) -> None:
-        super().__init__(instructions=INSTRUCTIONS)
+        # LiveKit envoie ces outils dans le session.update du realtime Grok Voice.
+        super().__init__(instructions=INSTRUCTIONS, tools=list(KNOWLEDGE_TOOLS))
 
 
 server = AgentServer()
