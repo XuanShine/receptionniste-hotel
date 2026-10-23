@@ -222,7 +222,7 @@ def _failure(detail: str) -> str:
     return (
         "Le transfert vers le poste 10 a échoué. "
         "Dis au client, brièvement, que le transfert n'a pas abouti "
-        f"et qu'il peut joindre la réception au {RECEPTION_PHONE}."
+        f"et propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle."
     )
 
 
@@ -249,7 +249,7 @@ async def perform_transfer(
         return TransferOutcome(
             result=(
                 "Pas d'appelant SIP dans la room : le REFER est impossible. "
-                f"Invite le client à appeler la réception au {RECEPTION_PHONE}."
+                f"Ne donne aucun numéro de téléphone : propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle, ou l'email."
             ),
             connected=False,
         )

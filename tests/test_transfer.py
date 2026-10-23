@@ -273,7 +273,7 @@ class CallerInstructionsTest(unittest.TestCase):
         receptionist = agent.Receptionniste()
         text = receptionist.instructions
         self.assertIn("Le numéro de l'appelant est inconnu.", text)
-        self.assertIn("Téléphone ?", text)
+        self.assertIn("Quel numéro de téléphone pour vous joindre ?", text)
         self.assertNotIn("0033422480521", text)
 
 
@@ -320,7 +320,7 @@ class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(called)
         self.assertFalse(outcome.connected)
-        self.assertIn(transfer.RECEPTION_PHONE, outcome.result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, outcome.result); self.assertIn("message", outcome.result)
 
     async def test_refer_failure_bridges_when_a_trunk_exists(self) -> None:
         bridged = False
@@ -352,7 +352,7 @@ class PerformTransferTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(outcome.connected)
-        self.assertIn(transfer.RECEPTION_PHONE, outcome.result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, outcome.result); self.assertIn("message", outcome.result)
 
 
 async def _refuse(identity: str, target: str) -> None:
@@ -402,7 +402,7 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
             second = await receptionist.transferer_reception(_Ctx())
 
         self.assertIsInstance(first, str)
-        self.assertIn(transfer.RECEPTION_PHONE, first)
+        self.assertNotIn(transfer.RECEPTION_PHONE, first); self.assertIn("message", first)
         self.assertIsInstance(second, str)
         self.assertEqual(len(sip.refers), 2)
 
@@ -419,7 +419,7 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sip.refers, [])
         self.assertIsInstance(result, str)
-        self.assertIn(transfer.RECEPTION_PHONE, result)
+        self.assertNotIn(transfer.RECEPTION_PHONE, result); self.assertIn("message", result)
 
     async def test_refused_refer_dials_extension_10(self) -> None:
         sip = _SipApi(refer_error=RuntimeError("403"))

@@ -642,9 +642,9 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
             "confirmation explicite",
             "Est-ce que je peux avoir votre nom ?",
             "Est-ce que je peux utiliser le numéro depuis lequel vous appelez ?",
-            "Téléphone ?",
+            "Quel numéro de téléphone pour vous joindre ?",
             "Email pour la confirmation ?",
-            "Nous allons prochainement vous envoyer un email de confirmation",
+            "Un de nos réceptionnistes va vérifier votre réservation",
             "poste 10",
         ):
             self.assertIn(fragment, instructions)

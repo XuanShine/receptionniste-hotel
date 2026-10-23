@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,6 +19,7 @@ from livekit.agents import (
 from livekit.agents.llm import ToolResult
 from livekit.plugins import xai
 
+from messages import save_message
 from record import keep_dialogue
 from search import WAIT_PHRASE, web_answer
 from transfer import (
@@ -145,7 +146,7 @@ class Receptionniste(Agent):
             return TransferOutcome(
                 result=(
                     "Le transfert est mal configuré. "
-                    f"Invite le client à appeler la réception au {RECEPTION_PHONE}."
+                    f"Ne donne aucun numéro de téléphone : propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle, ou l'email."
                 ),
                 connected=False,
             )
@@ -211,13 +212,13 @@ class Receptionniste(Agent):
         description=(
             "Crée une réservation confirmée dans WuBook après une confirmation explicite. "
             "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
-            "prix_total_eur est le total annoncé, par exemple 120.00. "
+            "prix_total_eur est le prix de la chambre seule renvoyé par verifier_disponibilite_et_prix, par exemple 120.00, sans aucun supplément (lit bébé, petit-déjeuner). Les suppléments vont dans notes. "
             "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
             "telephone est le numéro confirmé. "
             "Si le client a accepté le numéro de l'appelant indiqué dans les instructions, "
             "passe ce numéro. S'il a refusé, ou si ce numéro est inconnu, "
             "passe le numéro qu'il a dicté. "
-            "Après succès, dis « Nous allons prochainement vous envoyer un email de confirmation ». "
+            "Après succès, dis « C'est noté ! Un de nos réceptionnistes va vérifier votre réservation et vous envoyer un email de confirmation avec un lien de paiement. Avez-vous une autre question ? ». "
             "Ne lis pas le numéro de réservation. "
             "Si la réponse contient erreur, propose le transfert vers la réception."
         )
@@ -279,6 +280,24 @@ class Receptionniste(Agent):
         except Exception:
             logger.exception("phrase d'attente non jouée")
         return await web_answer(question)
+
+    @function_tool(
+        description=(
+            "Enregistre un message pour la réception quand le client veut être rappelé "
+            "ou que le transfert a échoué. Appelle-le seulement après avoir relu "
+            "le nom et le numéro et obtenu un oui. motif résume la demande."
+        )
+    )
+    async def prendre_message(
+        self, ctx: RunContext, nom: str, telephone: str, motif: str
+    ) -> str:
+        folder = Path(os.environ.get("MESSAGES_DIR", Path(__file__).resolve().parent.parent / "messages"))
+        try:
+            save_message(folder, datetime.now(), nom, telephone, motif)
+        except OSError:
+            logger.exception("message non enregistré")
+            return "Le message n'a pas pu être enregistré. Propose au client d'écrire à hotelpanoramagrasse arobase gmail point com."
+        return "Message enregistré. Dis au client qu'un réceptionniste le rappellera."
 
     def _desk(self) -> WubookService:
         if self._wubook is None:
