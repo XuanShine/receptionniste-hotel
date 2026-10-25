@@ -13,7 +13,6 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 import httpx
-from livekit import rtc
 from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
 
 __all__ = ["keep_dialogue"]
@@ -336,14 +335,6 @@ def _splice(sealed: SealedTranscript, summary: Summary) -> None:
     _atomic_write(sealed.path, closed.decode("utf-8"))
 
 
-def _caller_label(participant: rtc.RemoteParticipant) -> str | None:
-    if participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-        return None
-    phone = participant.attributes.get("sip.phoneNumber", "").strip()
-    label = phone or participant.identity
-    return label or None
-
-
 class _HistoryView(Protocol):
     items: Sequence[ChatItem]
 
@@ -352,17 +343,8 @@ class _SessionView(Protocol):
     history: _HistoryView
 
 
-class _CallerView(Protocol):
-    kind: object
-    attributes: Mapping[str, str]
-    identity: str
-
-
 class _RoomView(Protocol):
     name: str
-    remote_participants: Mapping[str, _CallerView]
-
-    def on(self, event: str, callback: Callable[..., object]) -> None: ...
 
 
 class _JobView(Protocol):
@@ -380,8 +362,12 @@ class _ContextView(Protocol):
     ) -> None: ...
 
 
-def keep_dialogue(session: _SessionView, ctx: _ContextView) -> None:
-    """Attach one shutdown write for this session. A second call returns."""
+def keep_dialogue(
+    session: _SessionView,
+    ctx: _ContextView,
+    *,
+    caller: str | None,
+) -> None:
     if getattr(session, _KEPT, False):
         return
     setattr(session, _KEPT, True)
@@ -390,18 +376,6 @@ def keep_dialogue(session: _SessionView, ctx: _ContextView) -> None:
     job_id = ctx.job.id
     console = ctx.is_fake_job()
     started_at = hotel_clock(time.time())
-    caller: list[str | None] = [None]
-
-    def remember(participant: rtc.RemoteParticipant) -> None:
-        if caller[0] is not None:
-            return
-        label = _caller_label(participant)
-        if label is not None:
-            caller[0] = label
-
-    for participant in ctx.room.remote_participants.values():
-        remember(participant)
-    ctx.room.on("participant_connected", remember)
 
     async def write_screenplay() -> None:
         deadline = time.monotonic() + _BUDGET_SECONDS
@@ -411,7 +385,7 @@ def keep_dialogue(session: _SessionView, ctx: _ContextView) -> None:
             job_id=job_id,
             console=console,
             started_at=started_at,
-            caller=caller[0],
+            caller=caller,
             lines=lines_of(items),
         )
         try:

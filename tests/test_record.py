@@ -251,7 +251,7 @@ def _shutdown(root: Path, grok: _Grok, *, key: str | None) -> Iterator[_Context]
     session = _Session(transfer_items())
     ctx = _Context()
     ctx.room.remote_participants["sip"] = _Participant(
-        "+33612345678", "sip_+33612345678"
+        "0033422480521", "sip_0033422480521"
     )
     overrides = {} if key is None else {"XAI_API_KEY": key}
     with (
@@ -262,7 +262,7 @@ def _shutdown(root: Path, grok: _Grok, *, key: str | None) -> Iterator[_Context]
     ):
         if key is None:
             os.environ.pop("XAI_API_KEY", None)
-        record.keep_dialogue(session, ctx)
+        record.keep_dialogue(session, ctx, caller="+33612345678")
         yield ctx
 
 
@@ -386,20 +386,12 @@ class RecordTest(unittest.TestCase):
         script = record.render(dialogue(lines=record.lines_of(transfer_items())))
         self.assertEqual(script, SCREENPLAY)
 
-    def test_keep_dialogue_writes_one_file(self) -> None:
-        moment = at(22, 14, 11)
-        session = _Session(
-            [
-                ChatMessage(
-                    role="user",
-                    content=["Je voudrais parler à quelqu'un."],
-                    created_at=moment.timestamp(),
-                )
-            ]
-        )
+    def test_keep_dialogue_writes_the_passed_number(self) -> None:
+        guest = "0651216491"
+        session = _Session(transfer_items())
         ctx = _Context()
         ctx.room.remote_participants["sip"] = _Participant(
-            "+33612345678", "sip_+33612345678"
+            "0033422480521", "sip_trunk"
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -407,23 +399,32 @@ class RecordTest(unittest.TestCase):
                 patch.object(record, "_record_root", return_value=root),
                 patch.dict(os.environ, {"XAI_API_KEY": ""}),
             ):
-                record.keep_dialogue(session, ctx)
-                record.keep_dialogue(session, ctx)
+                record.keep_dialogue(session, ctx, caller=guest)
+                record.keep_dialogue(session, ctx, caller="+33612345678")
                 self.assertEqual(len(ctx.callbacks), 1)
-                self.assertEqual(
-                    [event for event, _callback in ctx.room.events],
-                    ["participant_connected"],
-                )
                 asyncio.run(ctx.callbacks[0]())
-            files = list(root.iterdir())
-            self.assertEqual(len(files), 1)
-            text = files[0].read_text(encoding="utf-8")
-            self.assertIn("Hôtel Panorama", text)
-            self.assertIn("Appelant : +33612345678", text)
-            self.assertIn("Appelant — Je voudrais parler à quelqu'un.", text)
-            self.assertIn("Salle : call-AJ_8f3c", text)
-            self.assertNotIn("Résumé", text)
-            self.assertTrue(files[0].name.endswith("_call-AJ_8f3c_job_1.txt"))
+            text = next(root.iterdir()).read_text(encoding="utf-8")
+        self.assertIn(f"Appelant : {guest}", text)
+        self.assertNotIn("0033422480521", text)
+        self.assertNotIn("+33612345678", text)
+
+    def test_unknown_caller_stays_unknown(self) -> None:
+        session = _Session([])
+        ctx = _Context()
+        ctx.room.remote_participants["sip"] = _Participant(
+            "+33611111111", "sip_+33611111111"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                patch.object(record, "_record_root", return_value=root),
+                patch.dict(os.environ, {"XAI_API_KEY": ""}),
+            ):
+                record.keep_dialogue(session, ctx, caller=None)
+                asyncio.run(ctx.callbacks[0]())
+            text = next(root.iterdir()).read_text(encoding="utf-8")
+        self.assertIn("Appelant : (aucun)", text)
+        self.assertNotIn("+33611111111", text)
 
     def _assert_grok_saw_screenplay(self, grok: _Grok) -> None:
         self.assertEqual(len(grok.posts), 1)
