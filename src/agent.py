@@ -330,8 +330,8 @@ async def incoming_caller_phone(ctx: JobContext) -> str | None:
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(llm=xai.realtime.RealtimeModel(voice=GROK_VOICE))
-    keep_dialogue(session, ctx)
     phone = await incoming_caller_phone(ctx)
+    keep_dialogue(session, ctx, caller=phone)
     await session.start(room=ctx.room, agent=Receptionniste(caller_phone=phone))
     await session.generate_reply(
         instructions="Hôtel Panorama Bonjour, comment puis-je vous aider ?",
