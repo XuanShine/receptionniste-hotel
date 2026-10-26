@@ -1,7 +1,8 @@
-"""Tableau de bord de la réception. Localhost seulement."""
+"""Tableau de bord de la réception."""
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 
@@ -128,8 +129,8 @@ def main() -> None:
         ui.timer(_REFRESH_SECONDS, draw)
 
     ui.run(
-        host="127.0.0.1",
-        port=8080,
+        host=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),
+        port=int(os.environ.get("DASHBOARD_PORT", "8080")),
         title="Réception",
         language="fr",
         reload=False,

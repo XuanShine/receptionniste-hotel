@@ -1,0 +1,32 @@
+services:
+  provision:
+    build: .
+    command: ["python", "src/provision_sip.py"]
+    env_file: .env
+    restart: "no"
+
+  agent:
+    build: .
+    command: ["python", "src/agent.py", "start"]
+    env_file: .env
+    depends_on:
+      provision:
+        condition: service_completed_successfully
+    volumes:
+      - ./record:/app/record
+      - ./messages:/app/messages
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: ["python", "src/dashboard.py"]
+    env_file: .env
+    environment:
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./record:/app/record
+      - ./messages:/app/messages
+    restart: unless-stopped
