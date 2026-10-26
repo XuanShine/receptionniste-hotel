@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Protocol
@@ -92,6 +92,86 @@ def find_sip_caller(participants: Iterable[_SipLike]) -> str | None:
     return None
 
 
+_HOTEL_NUMBER = "0033422480521"
+_SCHEME = re.compile(r"^(?:sip|tel):", re.IGNORECASE)
+_QUOTED_NAME = re.compile(r'"([^"]*)"')
+_NUMBER_SOURCES = ("sip.rpid", "sip.pai", "sip.phoneNumber")
+
+
+def caller_phone(participants: Iterable[object]) -> str | None:
+    """Numéro du client, ou None s'il est absent, anonyme, ou celui de l'hôtel.
+
+    Le display name de sip.rpid gagne, puis celui de sip.pai, puis sip.phoneNumber.
+    """
+    for participant in participants:
+        if getattr(participant, "kind", None) != rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+            continue
+        for raw in _caller_sources(participant):
+            number = _usable_number(raw)
+            if number is not None:
+                return number
+        return None
+    return None
+
+
+def _caller_sources(participant: object) -> tuple[str, str, str]:
+    attributes = _attributes(participant)
+    rpid, pai, phone = (_text(attributes.get(key, "")) for key in _NUMBER_SOURCES)
+    return (_quoted_name(rpid), _quoted_name(pai), phone)
+
+
+def _attributes(participant: object) -> Mapping[str, str]:
+    attributes = getattr(participant, "attributes", None)
+    if not isinstance(attributes, Mapping):
+        return {}
+    return attributes
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _quoted_name(header: str) -> str:
+    match = _QUOTED_NAME.search(header)
+    if match is None:
+        return ""
+    return match.group(1).strip()
+
+
+def _presented_number(raw: str) -> str | None:
+    text = raw.strip()
+    if not text:
+        return None
+    text = _SCHEME.sub("", text, count=1).strip()
+    text = text.split("@", 1)[0].strip()
+    if not text or not any(ch.isdigit() for ch in text):
+        return None
+    return text
+
+
+def _usable_number(raw: str) -> str | None:
+    number = _presented_number(raw)
+    if number is None or number.casefold() == "anonymous" or _is_hotel(number):
+        return None
+    return number
+
+
+def _is_hotel(number: str) -> bool:
+    return _canonical(number) == _canonical(_HOTEL_NUMBER)
+
+
+def _canonical(number: str) -> str:
+    body = _SCHEME.sub("", number.strip(), count=1).split("@", 1)[0].strip()
+    digits = "".join(ch for ch in body if ch.isdigit())
+    if body.startswith("+") or digits.startswith("00"):
+        if digits.startswith("00"):
+            digits = digits[2:]
+        return digits
+    if len(digits) == 10 and digits.startswith("0"):
+        return "33" + digits[1:]
+    return digits
+
+
 def outbound_trunk_id() -> str:
     return os.environ.get("SIP_OUTBOUND_TRUNK_ID", "").strip()
 
@@ -142,7 +222,7 @@ def _failure(detail: str) -> str:
     return (
         "Le transfert vers le poste 10 a échoué. "
         "Dis au client, brièvement, que le transfert n'a pas abouti "
-        f"et qu'il peut joindre la réception au {RECEPTION_PHONE}."
+        f"et propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle."
     )
 
 
@@ -169,7 +249,7 @@ async def perform_transfer(
         return TransferOutcome(
             result=(
                 "Pas d'appelant SIP dans la room : le REFER est impossible. "
-                f"Invite le client à appeler la réception au {RECEPTION_PHONE}."
+                f"Ne donne aucun numéro de téléphone : propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle, ou l'email."
             ),
             connected=False,
         )

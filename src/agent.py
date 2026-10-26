@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,11 +20,14 @@ from livekit.agents import (
 from livekit.agents.llm import ToolResult
 from livekit.plugins import xai
 
+from messages import save_message
 from record import keep_dialogue
+from search import WAIT_PHRASE, web_answer
 from transfer import (
     RECEPTION_PHONE,
     TransferOutcome,
     bridge_sip_participant,
+    caller_phone,
     dial_number,
     find_sip_caller,
     outbound_trunk_id,
@@ -69,25 +73,44 @@ _MONTHS = (
 )
 
 
-def instructions_for(today: date) -> str:
+def instructions_for(today: date | None = None, caller_phone: str | None = None, now: datetime | None = None) -> str:
+    now = now or datetime.now(ZoneInfo("Europe/Paris"))
+    today = today or now.date()
     stamp = today.strftime("%d/%m/%Y")
     spoken = f"{_WEEKDAYS[today.weekday()]} {today.day} {_MONTHS[today.month - 1]} {today.year}"
+    heure = now.strftime("%H:%M")
     return (
         f"{INSTRUCTIONS}\n\n"
         "Date du jour\n\n"
         f"Aujourd'hui est le {spoken} ({stamp}). "
+        f"Il est actuellement {heure} (heure de Paris). "
         "« Ce soir » et « aujourd'hui » sont cette date. "
         "« Demain » est le lendemain. "
         "Si le client donne un jour et un mois sans année, utilise cette année. "
         "Si ce jour est déjà passé, utilise l'année suivante. "
         "Appelle verifier_disponibilite_et_prix avec des dates jj/mm/aaaa "
         "de cette année ou de la suivante.\n"
+        f"{_caller_note(caller_phone)}"
+    )
+
+
+def _caller_note(caller_phone: str | None) -> str:
+    if caller_phone is None:
+        return (
+            "\n\nNuméro de l'appelant\n\n"
+            "Le numéro de l'appelant est inconnu. Demande « Téléphone ? »."
+        )
+    return (
+        "\n\nNuméro de l'appelant\n\n"
+        f"Le numéro de l'appelant est {caller_phone}. "
+        "Demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». "
+        "Ne le passe à creer_reservation qu'après un oui."
     )
 
 
 class Receptionniste(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions=instructions_for(date.today()))
+    def __init__(self, caller_phone: str | None = None) -> None:
+        super().__init__(instructions=instructions_for(date.today(), caller_phone))
         self._transfer_started = False
         self._wubook: WubookService | None = None
 
@@ -128,7 +151,7 @@ class Receptionniste(Agent):
             return TransferOutcome(
                 result=(
                     "Le transfert est mal configuré. "
-                    f"Invite le client à appeler la réception au {RECEPTION_PHONE}."
+                    f"Ne donne aucun numéro de téléphone : propose de prendre un message (nom, numéro, motif) pour qu'un réceptionniste rappelle, ou l'email."
                 ),
                 connected=False,
             )
@@ -194,9 +217,13 @@ class Receptionniste(Agent):
         description=(
             "Crée une réservation confirmée dans WuBook après une confirmation explicite. "
             "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
-            "prix_total_eur est le total annoncé, par exemple 120.00. "
+            "prix_total_eur est le prix de la chambre seule renvoyé par verifier_disponibilite_et_prix, par exemple 120.00, sans aucun supplément (lit bébé, petit-déjeuner). Les suppléments vont dans notes. "
             "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
-            "Après succès, dis « Nous allons prochainement vous envoyer un email de confirmation ». "
+            "telephone est le numéro confirmé. "
+            "Si le client a accepté le numéro de l'appelant indiqué dans les instructions, "
+            "passe ce numéro. S'il a refusé, ou si ce numéro est inconnu, "
+            "passe le numéro qu'il a dicté. "
+            "Après succès, dis « C'est noté ! Un de nos réceptionnistes va vérifier votre réservation et vous envoyer un email de confirmation avec un lien de paiement. Avez-vous une autre question ? ». "
             "Ne lis pas le numéro de réservation. "
             "Si la réponse contient erreur, propose le transfert vers la réception."
         )
@@ -242,6 +269,41 @@ class Receptionniste(Agent):
             )
         )
 
+    @function_tool(
+        description=(
+            "Cherche sur internet une information sur l'hôtel ou Grasse "
+            "qui n'est pas dans les instructions. "
+            "Accès, transports, événements, musées, restaurants, météo. "
+            "Pas de prix ni de disponibilité de l'hôtel. "
+            "Pas de sujet hors de l'hôtel et de Grasse. "
+            "question est la question du client."
+        )
+    )
+    async def rechercher_internet(self, ctx: RunContext, question: str) -> str:
+        try:
+            ctx.session.say(WAIT_PHRASE, allow_interruptions=True)
+        except Exception:
+            logger.exception("phrase d'attente non jouée")
+        return await web_answer(question)
+
+    @function_tool(
+        description=(
+            "Enregistre un message pour la réception quand le client veut être rappelé "
+            "ou que le transfert a échoué. Appelle-le seulement après avoir relu "
+            "le nom et le numéro et obtenu un oui. motif résume la demande."
+        )
+    )
+    async def prendre_message(
+        self, ctx: RunContext, nom: str, telephone: str, motif: str
+    ) -> str:
+        folder = Path(os.environ.get("MESSAGES_DIR", Path(__file__).resolve().parent.parent / "messages"))
+        try:
+            save_message(folder, datetime.now(), nom, telephone, motif)
+        except OSError:
+            logger.exception("message non enregistré")
+            return "Le message n'a pas pu être enregistré. Propose au client d'écrire à hotelpanoramagrasse arobase gmail point com."
+        return "Message enregistré. Dis au client qu'un réceptionniste le rappellera."
+
     def _desk(self) -> WubookService:
         if self._wubook is None:
             self._wubook = WubookService.from_env(os.environ)
@@ -262,11 +324,20 @@ class Receptionniste(Agent):
 server = AgentServer()
 
 
+async def incoming_caller_phone(ctx: JobContext) -> str | None:
+    """Lit le numéro une fois la room connectée. La console n'a pas d'appelant SIP."""
+    if ctx.is_fake_job():
+        return None
+    await ctx.connect()
+    return caller_phone(ctx.room.remote_participants.values())
+
+
 @server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(llm=xai.realtime.RealtimeModel(voice=GROK_VOICE))
     keep_dialogue(session, ctx)
-    await session.start(room=ctx.room, agent=Receptionniste())
+    phone = await incoming_caller_phone(ctx)
+    await session.start(room=ctx.room, agent=Receptionniste(caller_phone=phone))
     await session.generate_reply(
         instructions="Hôtel Panorama Bonjour, comment puis-je vous aider ?",
     )
