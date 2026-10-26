@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -72,13 +73,17 @@ _MONTHS = (
 )
 
 
-def instructions_for(today: date, caller_phone: str | None = None) -> str:
+def instructions_for(today: date | None = None, caller_phone: str | None = None, now: datetime | None = None) -> str:
+    now = now or datetime.now(ZoneInfo("Europe/Paris"))
+    today = today or now.date()
     stamp = today.strftime("%d/%m/%Y")
     spoken = f"{_WEEKDAYS[today.weekday()]} {today.day} {_MONTHS[today.month - 1]} {today.year}"
+    heure = now.strftime("%H:%M")
     return (
         f"{INSTRUCTIONS}\n\n"
         "Date du jour\n\n"
         f"Aujourd'hui est le {spoken} ({stamp}). "
+        f"Il est actuellement {heure} (heure de Paris). "
         "« Ce soir » et « aujourd'hui » sont cette date. "
         "« Demain » est le lendemain. "
         "Si le client donne un jour et un mois sans année, utilise cette année. "
