@@ -1,7 +1,8 @@
 import inspect
 import sys
 import unittest
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from unittest.mock import patch
 
@@ -366,8 +367,46 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
         instructions = (SRC / "instructions.md").read_text(encoding="utf-8")
         self.assertIn("transferer_reception", instructions)
         self.assertIn(transfer.TRANSFER_PHRASE, instructions)
-        stamp = date.today().strftime("%d/%m/%Y")
+        stamp = datetime.now(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y")
         self.assertIn(stamp, agent.Receptionniste().instructions)
+        self.assertIn("(heure de Paris).", agent.Receptionniste().instructions)
+
+    def test_instructions_state_paris_time_for_night_bookings(self) -> None:
+        instructions = (SRC / "instructions.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Nouvelle réservation entre minuit et 5h du matin (heure de Paris) : "
+            "ne prends pas la réservation toi-même, appelle immédiatement "
+            "transferer_reception. Si le transfert échoue, prends un message.",
+            instructions,
+        )
+        self.assertIn(
+            "Arrivée de nuit : le client doit prévenir la réception de son heure d'arrivée. "
+            "Une fois sur place, il y a une sonnette à l'entrée ; il peut aussi appeler "
+            "le numéro de la réception.",
+            instructions,
+        )
+        self.assertIn(
+            "Avantage à réserver en direct : le prix est moins cher que sur les "
+            "plateformes de réservation en ligne (Booking, etc.).",
+            instructions,
+        )
+        self.assertIn(
+            "Candidature / envoi de CV : donne l'adresse direction.hotelpanorama "
+            "arobase gmail point com (ne transfère pas l'appel).",
+            instructions,
+        )
+        moment = datetime(2026, 10, 26, 2, 15, tzinfo=ZoneInfo("Europe/Paris"))
+        text = agent.instructions_for(now=moment)
+        self.assertIn(
+            "Aujourd'hui est le lundi 26 octobre 2026 (26/10/2026). "
+            "Il est actuellement 02:15 (heure de Paris).",
+            text,
+        )
+        self.assertIn("« Ce soir » et « aujourd'hui » sont cette date.", text)
+        self.assertIn("Le numéro de l'appelant est inconnu.", text)
+        with_phone = agent.instructions_for(caller_phone="+33612345678", now=moment)
+        self.assertIn("Le numéro de l'appelant est +33612345678.", with_phone)
+        self.assertIn("Il est actuellement 02:15 (heure de Paris).", with_phone)
 
     async def test_tool_sends_refer_to_extension_10(self) -> None:
         sip = _SipApi()
