@@ -6,7 +6,7 @@ Réception IA du Panorama Hotel. Version 1 : un appel entrant 3CX arrive sur Liv
 Appelant → 3CX → SIP (PCMU, port 5060) → LiveKit → agent Python → Grok Voice
 ```
 
-Appels entrants seulement. Pas d'appel sortant. Les disponibilités et les réservations passent par WuBook Wired.
+Appels entrants seulement. Pas d'appel sortant. Les disponibilités passent par WuBook Wired. L'agent ne crée pas la réservation : après le devis, il laisse un message pour qu'un réceptionniste la prenne.
 
 ## Prérequis
 
@@ -84,7 +84,7 @@ uv run python src/agent.py dev
 
 L'agent accueille en français. Pour un séjour daté, il interroge WuBook. Il n'annonce aucun prix que l'outil n'a pas renvoyé.
 
-Au démarrage d'un appel, l'agent lit le display name entre guillemets de `sip.rpid`, puis celui de `sip.pai`, puis `sip.phoneNumber`. Une valeur vide, `anonymous`, ou le numéro de l'hôtel `0033422480521` est ignorée. Les formes `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:` comptent aussi comme l'hôtel. `0651216491` et `+33651216491` sont des numéros de client. S'il reste un numéro, l'agent demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `creer_reservation` qu'après un oui. Sinon il demande le téléphone.
+Au démarrage d'un appel, l'agent lit le display name entre guillemets de `sip.rpid`, puis celui de `sip.pai`, puis `sip.phoneNumber`. Une valeur vide, `anonymous`, ou le numéro de l'hôtel `0033422480521` est ignorée. Les formes `+33422480521`, `0422480521`, et ces mêmes valeurs avec un préfixe `sip:` ou `tel:` comptent aussi comme l'hôtel. `0651216491` et `+33651216491` sont des numéros de client. S'il reste un numéro, l'agent demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». Il ne le met dans `prendre_message` qu'après un oui. Sinon il demande le téléphone.
 
 Pour une question sur l'hôtel ou Grasse qui n'est pas dans les instructions, l'agent dit « Je regarde ça. » et appelle l'API xAI avec l'outil `web_search`. Le délai est de 8 secondes. Si la recherche échoue, il propose un collègue.
 
@@ -107,7 +107,7 @@ L'agent parle à WuBook Wired en XML-RPC, sur `https://wired.wubook.net/xrws/`. 
 
 `verifier_disponibilite_et_prix` lit `fetch_rooms_values` et `fetch_plan_prices` pour le plan `0`. La date de fin de ces deux lectures est incluse. La dernière nuit cotée est donc le jour de départ moins un jour. L'outil ne garde que les chambres réelles `329039`, `329667`, `329670`, `407751`, `469743` et `469744`, après les avoir vérifiées avec `fetch_rooms`. Une chambre est proposée si elle est libre chaque nuit, sans fermeture, si le séjour minimum est respecté, si le séjour maximum l'est aussi quand WuBook en pose un, et si `occupancy` est exactement 2 pour une ou deux personnes, 3 pour trois personnes, 4 pour quatre. Au-delà, aucune chambre n'est proposée. Le prix vient du plan. Une nuit sous 45 € écarte la chambre. La réponse donne le total et le prix de chaque nuit.
 
-`creer_reservation` relit la disponibilité et le prix, puis appelle `new_reservation` avec `status` `1`, `ignore_restrs` `0`, `ignore_avail` `0`, `ccard` `0` et `origin` `vocal`. Il relit ensuite la réservation avec `fetch_booking` et renvoie le code lu. Aucune carte n'est demandée au téléphone.
+L'agent n'expose pas d'outil de réservation. Après un devis et une confirmation du client, il appelle `prendre_message` avec les dates, la chambre, les personnes, le prix, l'email et les suppléments. Un réceptionniste crée ensuite la réservation. Aucune carte n'est demandée au téléphone. `WubookService.reserver` reste dans le client WuBook et n'est pas appelé par l'agent.
 
 Le catalogue des chambres et les grilles restent en cache 5 minutes. `fetch_rooms_values` est limité à 240 appels par 12 h. La relecture qui précède une réservation n'utilise pas ce cache. Les tests ouvrent un serveur XML-RPC local. Ils n'appellent pas WuBook.
 

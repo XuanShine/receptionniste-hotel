@@ -35,7 +35,7 @@ from transfer import (
     refer_sip_participant,
     refer_target_from_env,
 )
-from wubook import WubookError, WubookService, parse_guest
+from wubook import WubookError, WubookService
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -104,7 +104,7 @@ def _caller_note(caller_phone: str | None) -> str:
         "\n\nNuméro de l'appelant\n\n"
         f"Le numéro de l'appelant est {caller_phone}. "
         "Demande « Est-ce que je peux utiliser le numéro depuis lequel vous appelez ? ». "
-        "Ne le passe à creer_reservation qu'après un oui."
+        "Ne le passe à prendre_message qu'après un oui."
     )
 
 
@@ -215,62 +215,6 @@ class Receptionniste(Agent):
 
     @function_tool(
         description=(
-            "Crée une réservation confirmée dans WuBook après une confirmation explicite. "
-            "chambre est l'identifiant renvoyé par verifier_disponibilite_et_prix. "
-            "prix_total_eur est le prix de la chambre seule renvoyé par verifier_disponibilite_et_prix, par exemple 120.00, sans aucun supplément (lit bébé, petit-déjeuner). Les suppléments vont dans notes. "
-            "Ne demande jamais de carte bancaire. Un pays vide signifie FR. "
-            "telephone est le numéro confirmé. "
-            "Si le client a accepté le numéro de l'appelant indiqué dans les instructions, "
-            "passe ce numéro. S'il a refusé, ou si ce numéro est inconnu, "
-            "passe le numéro qu'il a dicté. "
-            "Après succès, dis « C'est noté ! Un de nos réceptionnistes va vérifier votre réservation et vous envoyer un email de confirmation avec un lien de paiement. Avez-vous une autre question ? ». "
-            "Ne lis pas le numéro de réservation. "
-            "Si la réponse contient erreur, propose le transfert vers la réception."
-        )
-    )
-    async def creer_reservation(
-        self,
-        ctx: RunContext,
-        arrivee: str,
-        depart: str,
-        chambre: int,
-        nom: str,
-        prenom: str,
-        email: str,
-        telephone: str,
-        adultes: int,
-        enfants: int,
-        prix_total_eur: str,
-        ville: str = "",
-        rue: str = "",
-        pays: str = "",
-        heure_arrivee: str = "",
-        notes: str = "",
-    ) -> str:
-        return await self._wubook_call(
-            lambda desk: desk.reserver(
-                arrival=arrivee,
-                departure=depart,
-                room_id=chambre,
-                price_total=prix_total_eur,
-                guest=parse_guest(
-                    last_name=nom,
-                    first_name=prenom,
-                    email=email,
-                    phone=telephone,
-                    city=ville,
-                    street=rue,
-                    country=pays,
-                    arrival_hour=heure_arrivee,
-                    notes=notes,
-                ),
-                adults=adultes,
-                children=enfants,
-            )
-        )
-
-    @function_tool(
-        description=(
             "Cherche sur internet une information sur l'hôtel ou Grasse "
             "qui n'est pas dans les instructions. "
             "Accès, transports, événements, musées, restaurants, météo. "
@@ -288,9 +232,15 @@ class Receptionniste(Agent):
 
     @function_tool(
         description=(
-            "Enregistre un message pour la réception quand le client veut être rappelé "
-            "ou que le transfert a échoué. Appelle-le seulement après avoir relu "
-            "le nom et le numéro et obtenu un oui. motif résume la demande."
+            "Enregistre un message pour qu'un réceptionniste humain le traite. "
+            "Obligatoire pour une nouvelle réservation : tu ne crées jamais la réservation dans WuBook. "
+            "Sert aussi quand le client veut être rappelé ou que le transfert a échoué. "
+            "Appelle-le seulement après avoir relu le nom et le numéro et obtenu un oui. "
+            "Pour une nouvelle réservation, nom contient le prénom et le nom, "
+            "telephone est le numéro confirmé, et motif contient les dates jj/mm/aaaa, "
+            "la chambre, le nombre de personnes, le prix de la chambre, l'email "
+            "et les suppléments (lit bébé, petit-déjeuner, parking, transport, heure d'arrivée). "
+            "motif résume la demande."
         )
     )
     async def prendre_message(
@@ -302,7 +252,11 @@ class Receptionniste(Agent):
         except OSError:
             logger.exception("message non enregistré")
             return "Le message n'a pas pu être enregistré. Propose au client d'écrire à hotelpanoramagrasse arobase gmail point com."
-        return "Message enregistré. Dis au client qu'un réceptionniste le rappellera."
+        return (
+            "Message enregistré. "
+            "S'il s'agit d'une nouvelle réservation, dis « C'est noté ! Un de nos réceptionnistes va s'occuper de votre réservation et vous envoyer un email de confirmation avec un lien de paiement. Avez-vous une autre question ? ». "
+            "Sinon, dis au client qu'un réceptionniste le rappellera."
+        )
 
     def _desk(self) -> WubookService:
         if self._wubook is None:

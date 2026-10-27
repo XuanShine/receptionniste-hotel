@@ -1,12 +1,15 @@
 import inspect
 import json
+import os
 import sys
+import tempfile
 import threading
 import unittest
 import xmlrpc.client
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 from xmlrpc.server import SimpleXMLRPCServer
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -589,33 +592,33 @@ def _book(
     )
 
 
+def _tool_names(receptionist: object) -> set[str]:
+    return {tool.id for tool in receptionist.tools}  # type: ignore[attr-defined]
+
+
 class AgentToolTest(unittest.IsolatedAsyncioTestCase):
-    async def test_tools_quote_and_book_and_transfer_stays(self) -> None:
+    async def test_quote_stays_and_a_new_stay_is_only_a_message(self) -> None:
         import agent
 
         wired = catalog()
-        with serve(wired) as proxy:
+        motif = (
+            "Nouvelle réservation. Léa Martin, lea@example.com. "
+            "2 adultes. Double, du 10/06/2026 au 12/06/2026, 130 € la chambre."
+        )
+        with serve(wired) as proxy, tempfile.TemporaryDirectory() as folder:
             receptionist = agent.Receptionniste()
             receptionist._wubook = service(proxy)
+            names = _tool_names(receptionist)
+            self.assertIn("verifier_disponibilite_et_prix", names)
+            self.assertIn("prendre_message", names)
+            self.assertNotIn("creer_reservation", names)
+            self.assertFalse(hasattr(receptionist, "creer_reservation"))
             quoted = await receptionist.verifier_disponibilite_et_prix(
                 object(),
                 ARRIVAL,
                 DEPARTURE,
                 2,
                 0,
-            )
-            booked = await receptionist.creer_reservation(
-                object(),
-                ARRIVAL,
-                DEPARTURE,
-                329039,
-                "Martin",
-                "Léa",
-                "lea@example.com",
-                "0612345678",
-                2,
-                0,
-                "130.00",
             )
             failed = await receptionist.verifier_disponibilite_et_prix(
                 object(),
@@ -624,11 +627,24 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
                 2,
                 0,
             )
+            with patch.dict(os.environ, {"MESSAGES_DIR": folder}):
+                saved = await receptionist.prendre_message(
+                    object(),
+                    "Léa Martin",
+                    "0612345678",
+                    motif,
+                )
+            note = next(Path(folder).glob("*.txt")).read_text(encoding="utf-8")
 
         self.assertEqual(json.loads(quoted)["chambres"][0]["prix_total_eur"], "130.00")
-        self.assertEqual(json.loads(booked)["reservation"], "HP-2048")
-        self.assertEqual(_call(wired, "new_reservation")[5]["phone"], "0612345678")
+        self.assertNotIn("new_reservation", wired.names())
         self.assertIn("jj/mm/aaaa", json.loads(failed)["erreur"])
+        self.assertIn("s'occuper de votre réservation", saved)
+        self.assertIn("email de confirmation", saved)
+        self.assertIn("Nom : Léa Martin", note)
+        self.assertIn("Téléphone : 0612345678", note)
+        self.assertIn("130 € la chambre", note)
+        self.assertIn("lea@example.com", note)
         self.assertEqual(
             list(inspect.signature(agent.Receptionniste().transferer_reception).parameters),
             ["ctx"],
@@ -636,7 +652,8 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
         instructions = (SRC / "instructions.md").read_text(encoding="utf-8")
         for fragment in (
             "verifier_disponibilite_et_prix",
-            "creer_reservation",
+            "prendre_message",
+            "ne crées jamais la réservation",
             "Combien de personnes ?",
             "carte bancaire",
             "confirmation explicite",
@@ -644,12 +661,19 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
             "Est-ce que je peux utiliser le numéro depuis lequel vous appelez ?",
             "Quel numéro de téléphone pour vous joindre ?",
             "Email pour la confirmation ?",
-            "Un de nos réceptionnistes va vérifier votre réservation",
+            "Je vous confirme la réservation ?",
+            "Un de nos réceptionnistes va s'occuper de votre réservation",
             "poste 10",
+            "minuit et 5h",
+            "Annulation, modification de réservation",
+            "Réservation existante",
         ):
             self.assertIn(fragment, instructions)
+        self.assertNotIn("creer_reservation", instructions)
+        message = next(tool for tool in receptionist.tools if tool.id == "prendre_message")
+        self.assertIn("ne crées jamais la réservation", message.info.description or "")
 
-    async def test_caller_phone_reaches_the_reservation(self) -> None:
+    async def test_caller_phone_reaches_the_message_not_wubook(self) -> None:
         import agent
         import transfer
         from livekit import rtc
@@ -663,25 +687,24 @@ class AgentToolTest(unittest.IsolatedAsyncioTestCase):
         number = transfer.caller_phone([_Caller()])
         self.assertEqual(number, "+33601020304")
         wired = catalog()
-        with serve(wired) as proxy:
+        motif = "Nouvelle réservation. Léa Martin, lea@example.com. Double, du 10/06/2026 au 12/06/2026."
+        with serve(wired) as proxy, tempfile.TemporaryDirectory() as folder:
             receptionist = agent.Receptionniste(caller_phone=number)
             receptionist._wubook = service(proxy)
             self.assertIn(number, receptionist.instructions)
-            await receptionist.creer_reservation(
-                object(),
-                ARRIVAL,
-                DEPARTURE,
-                329039,
-                "Martin",
-                "Léa",
-                "lea@example.com",
-                number,
-                2,
-                0,
-                "130.00",
-            )
+            self.assertIn("prendre_message qu'après un oui", receptionist.instructions)
+            self.assertNotIn("creer_reservation", receptionist.instructions)
+            with patch.dict(os.environ, {"MESSAGES_DIR": folder}):
+                await receptionist.prendre_message(
+                    object(),
+                    "Léa Martin",
+                    number,
+                    motif,
+                )
+            note = next(Path(folder).glob("*.txt")).read_text(encoding="utf-8")
 
-        self.assertEqual(_call(wired, "new_reservation")[5]["phone"], "+33601020304")
+        self.assertIn(f"Téléphone : {number}", note)
+        self.assertNotIn("new_reservation", wired.names())
 
 
 if __name__ == "__main__":
