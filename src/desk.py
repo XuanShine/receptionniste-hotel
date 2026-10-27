@@ -11,6 +11,8 @@ from pathlib import Path
 
 _TOOL = re.compile(r"^\d{2}:\d{2}:\d{2}  Outil (\S+) — (.*)$")
 _RESUME = "Résumé : "
+# #MOT ou #mot-compose. Le # ne doit pas être collé à un mot (C#, mail#suite).
+_HASHTAG = re.compile(r"(?<![\w#])#([^\W\d_][\w-]*)")
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class CallCard:
     resume: str | None
     transcript: str
     issues: tuple[Issue, ...]
+    tags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,7 @@ def parse_call(text: str, path: Path) -> CallCard | None:
             continue
         if line:
             turns.append(line)
+    transcript = "\n".join(turns)
     return CallCard(
         path=path,
         started=started,
@@ -180,8 +184,9 @@ def parse_call(text: str, path: Path) -> CallCard | None:
         room=header.get("Salle", ""),
         console=header.get("Mode") == "console",
         resume=resume,
-        transcript="\n".join(turns),
+        transcript=transcript,
         issues=_issues(turns),
+        tags=hashtags(transcript, resume or ""),
     )
 
 
@@ -201,6 +206,23 @@ def parse_message(text: str, path: Path) -> DeskMessage | None:
         phone=fields["Téléphone"],
         reason=fields.get("Motif", ""),
     )
+
+
+def hashtags(*parts: str) -> tuple[str, ...]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        for match in _HASHTAG.finditer(part):
+            token = match.group(1).strip("-")
+            if not token:
+                continue
+            label = f"#{token}"
+            key = label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(label)
+    return tuple(found)
 
 
 def _read_calls(folder: Path) -> list[CallCard]:

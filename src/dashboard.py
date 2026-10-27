@@ -240,6 +240,11 @@ def _chips(call: desk.CallCard) -> list[tuple[str, str]]:
         chips.append((label, color))
     if call.resume is None:
         chips.append(("sans résumé", "grey"))
+    for label in call.tags:
+        if label in seen:
+            continue
+        seen.add(label)
+        chips.append((label, "primary"))
     return chips
 
 
