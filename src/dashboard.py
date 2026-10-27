@@ -53,7 +53,7 @@ def main() -> None:
                 with ui.column().classes("min-w-72 flex-1 gap-3"):
                     heading = ui.label("Choisissez un appel ou un message.").classes("text-lg")
                     editor = ui.textarea().classes("w-full font-mono").props("rows=22")
-                    with ui.row().classes("gap-2"):
+                    with ui.row().classes("items-center gap-2 flex-nowrap"):
                         ui.button("Enregistrer", on_click=lambda: save()).props("color=primary")
                         ui.button("Annuler", on_click=lambda: cancel()).props("outline")
                         delete_button = ui.button("Supprime", on_click=lambda: act_on_selected(suppress)).props(
@@ -170,15 +170,7 @@ def main() -> None:
                 if view == "poubelle"
                 else "Aucun appel sur cette période."
             )
-            _calls(
-                call_list,
-                calls,
-                selected,
-                open_path,
-                empty,
-                suppress if view == "appels" else None,
-                revive if view == "poubelle" else None,
-            )
+            _calls(call_list, calls, selected, open_path, empty)
             message_block.set_visibility(view == "appels")
             if view == "appels":
                 _messages(message_list, board, selected, open_path)
@@ -271,7 +263,7 @@ def listed_calls(board: desk.DayDesk, view: str) -> tuple[desk.CallCard, ...]:
     return board.active_calls
 
 
-def _calls(host, calls, selected: str | None, show, empty: str, on_delete, on_restore) -> None:
+def _calls(host, calls, selected: str | None, show, empty: str) -> None:
     host.clear()
     with host:
         if not calls:
@@ -280,28 +272,18 @@ def _calls(host, calls, selected: str | None, show, empty: str, on_delete, on_re
         for call in calls:
             path = str(call.path)
             border = "border-2 border-stone-800" if path == selected else "border border-stone-300"
-            row = ui.card().classes(f"w-full bg-white {border}")
+            row = ui.card().classes(f"w-full cursor-pointer bg-white {border}")
+            row.on("click", lambda _event, item=path: show(item))
             with row:
-                with ui.row().classes("w-full items-start flex-nowrap gap-2"):
-                    with ui.column().classes("min-w-0 flex-1 cursor-pointer gap-1") as opener:
-                        with ui.row().classes("w-full items-baseline justify-between"):
-                            ui.label(call.started.strftime("%d/%m %H:%M")).classes("font-medium")
-                            ui.label(call.caller).classes("text-sm")
-                        if call.console:
-                            ui.badge("console", color="grey")
-                        ui.label(call.resume or "Sans résumé").classes("text-sm text-stone-700")
-                        with ui.row().classes("gap-1 flex-wrap"):
-                            for label, color in _chips(call):
-                                ui.badge(label, color=color)
-                    opener.on("click", lambda _event, item=path: show(item))
-                    if on_delete is not None:
-                        ui.button("Supprime", on_click=lambda _event, item=path: on_delete(item)).props(
-                            "flat dense no-caps color=negative"
-                        )
-                    if on_restore is not None:
-                        ui.button("Restaurer", on_click=lambda _event, item=path: on_restore(item)).props(
-                            "flat dense no-caps"
-                        )
+                with ui.row().classes("w-full items-baseline justify-between"):
+                    ui.label(call.started.strftime("%d/%m %H:%M")).classes("font-medium")
+                    ui.label(call.caller).classes("text-sm")
+                if call.console:
+                    ui.badge("console", color="grey")
+                ui.label(call.resume or "Sans résumé").classes("text-sm text-stone-700")
+                with ui.row().classes("gap-1 flex-wrap"):
+                    for label, color in _chips(call):
+                        ui.badge(label, color=color)
 
 
 def _messages(host, board: desk.DayDesk, selected: str | None, show) -> None:
