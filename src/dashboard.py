@@ -24,6 +24,7 @@ def main() -> None:
             "saved": "",
             "seen": None,
             "hold": False,
+            "view": "appels",
         }
 
         ui.query("body").style("background: #f3efe6; color: #1c1915;")
@@ -38,16 +39,29 @@ def main() -> None:
             stats = ui.row().classes("w-full gap-3 flex-wrap")
             with ui.row().classes("w-full items-start gap-4 flex-wrap"):
                 with ui.column().classes("w-full md:w-96 gap-3"):
-                    ui.label("Appels").classes("text-xl")
+                    with ui.row().classes("gap-2"):
+                        appels_tab = ui.button("Appels", on_click=lambda: switch("appels")).props(
+                            "no-caps color=primary"
+                        )
+                        trash_tab = ui.button("Poubelle", on_click=lambda: switch("poubelle")).props(
+                            "no-caps outline color=primary"
+                        )
                     call_list = ui.column().classes("w-full gap-2")
-                    ui.label("Messages").classes("text-xl")
-                    message_list = ui.column().classes("w-full gap-2")
+                    with ui.column().classes("w-full gap-2") as message_block:
+                        ui.label("Messages").classes("text-xl")
+                        message_list = ui.column().classes("w-full gap-2")
                 with ui.column().classes("min-w-72 flex-1 gap-3"):
                     heading = ui.label("Choisissez un appel ou un message.").classes("text-lg")
                     editor = ui.textarea().classes("w-full font-mono").props("rows=22")
-                    with ui.row().classes("gap-2"):
+                    with ui.row().classes("items-center gap-2 flex-nowrap"):
                         ui.button("Enregistrer", on_click=lambda: save()).props("color=primary")
                         ui.button("Annuler", on_click=lambda: cancel()).props("outline")
+                        delete_button = ui.button("Supprime", on_click=lambda: act_on_selected(suppress)).props(
+                            "outline no-caps color=negative"
+                        )
+                        restore_button = ui.button("Restaurer", on_click=lambda: act_on_selected(revive)).props(
+                            "outline no-caps"
+                        )
                     notice = ui.label("").classes("text-sm text-stone-600")
 
         def dirty() -> bool:
@@ -88,26 +102,82 @@ def main() -> None:
             editor.value = state["saved"] if isinstance(state["saved"], str) else ""
             notice.set_text("")
 
-        def draw() -> None:
-            if dirty():
+        def switch(view: str) -> None:
+            if view not in ("appels", "poubelle") or state["view"] == view:
                 return
+            state["view"] = view
+            state["seen"] = None
+            draw()
+
+        def act_on_selected(action) -> None:
+            selected = state["selected"]
+            if isinstance(selected, str):
+                action(selected)
+
+        def suppress(path: str) -> None:
+            _retag(
+                path,
+                desk.soft_delete,
+                "Enregistrez ou annulez avant de supprimer l'appel.",
+                "Appel mis à la poubelle.",
+                "Suppression impossible.",
+            )
+
+        def revive(path: str) -> None:
+            _retag(
+                path,
+                desk.restore_call,
+                "Enregistrez ou annulez avant de restaurer l'appel.",
+                "Appel restauré.",
+                "Restauration impossible.",
+            )
+
+        def _retag(path: str, rewrite, blocked: str, done: str, failed: str) -> None:
+            if state["selected"] == path and dirty():
+                notice.set_text(blocked)
+                return
+            try:
+                text = rewrite(Path(path))
+            except OSError:
+                notice.set_text(failed)
+                return
+            if state["selected"] == path:
+                state["saved"] = text
+                editor.value = text
+            notice.set_text(done)
+            state["seen"] = None
+            draw()
+
+        def draw() -> None:
             span = desk.Span.of(_day(state["start"]), _day(state["end"]))
             board = desk.load_day(span)
             paths = _paths(board)
-            selected = state["selected"]
-            if isinstance(selected, str) and selected not in paths:
+            selected = state["selected"] if isinstance(state["selected"], str) else None
+            if selected is not None and selected not in paths and not dirty():
                 state["selected"] = None
                 state["saved"] = ""
                 editor.value = ""
                 selected = None
-            seen = (span.start, span.end, selected, _signature(board))
+            view = state["view"] if state["view"] in ("appels", "poubelle") else "appels"
+            seen = (span.start, span.end, selected, view, _signature(board))
             if seen == state["seen"]:
                 return
             state["seen"] = seen
-            _counts(stats, board)
-            _calls(call_list, board, selected if isinstance(selected, str) else None, open_path)
-            _messages(message_list, board, selected if isinstance(selected, str) else None, open_path)
-            heading.set_text(_heading(board, selected if isinstance(selected, str) else None))
+            _counts(stats, desk.DayDesk(board.span, board.active_calls, board.messages))
+            calls = listed_calls(board, view)
+            empty = (
+                "Aucun appel dans la poubelle."
+                if view == "poubelle"
+                else "Aucun appel sur cette période."
+            )
+            _calls(call_list, calls, selected, open_path, empty)
+            message_block.set_visibility(view == "appels")
+            if view == "appels":
+                _messages(message_list, board, selected, open_path)
+            _mark_tab(appels_tab, view == "appels")
+            _mark_tab(trash_tab, view == "poubelle")
+            _mark_call_actions(delete_button, restore_button, board, selected)
+            heading.set_text(_heading(board, selected))
 
         def on_period(_event) -> None:
             if state["hold"]:
@@ -187,13 +257,19 @@ def _counts(host, board: desk.DayDesk) -> None:
                 ui.label(label).classes("text-stone-600 text-sm")
 
 
-def _calls(host, board: desk.DayDesk, selected: str | None, show) -> None:
+def listed_calls(board: desk.DayDesk, view: str) -> tuple[desk.CallCard, ...]:
+    if view == "poubelle":
+        return board.deleted_calls
+    return board.active_calls
+
+
+def _calls(host, calls, selected: str | None, show, empty: str) -> None:
     host.clear()
     with host:
-        if not board.calls:
-            ui.label("Aucun appel sur cette période.").classes("text-stone-600")
+        if not calls:
+            ui.label(empty).classes("text-stone-600")
             return
-        for call in board.calls:
+        for call in calls:
             path = str(call.path)
             border = "border-2 border-stone-800" if path == selected else "border border-stone-300"
             row = ui.card().classes(f"w-full cursor-pointer bg-white {border}")
@@ -240,12 +316,31 @@ def _chips(call: desk.CallCard) -> list[tuple[str, str]]:
         chips.append((label, color))
     if call.resume is None:
         chips.append(("sans résumé", "grey"))
-    for label in call.tags:
+    for label in desk.visible_tags(call):
         if label in seen:
             continue
         seen.add(label)
         chips.append((label, "primary"))
     return chips
+
+
+def _mark_tab(button, active: bool) -> None:
+    if active:
+        button.props(remove="outline")
+        button.props("color=primary no-caps")
+        return
+    button.props("outline color=primary no-caps")
+
+
+def _mark_call_actions(delete_button, restore_button, board: desk.DayDesk, selected: str | None) -> None:
+    call = next((item for item in board.calls if str(item.path) == selected), None) if selected else None
+    if call is None:
+        delete_button.set_visibility(False)
+        restore_button.set_visibility(False)
+        return
+    deleted = desk.is_deleted(call)
+    delete_button.set_visibility(not deleted)
+    restore_button.set_visibility(deleted)
 
 
 def _chip(issue: desk.Issue) -> tuple[str, str]:

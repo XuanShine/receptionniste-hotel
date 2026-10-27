@@ -215,6 +215,75 @@ class DeskTest(unittest.TestCase):
             ("#mot-avec-tiret", "#URGENT"),
         )
 
+    def test_supprime_adds_delete_tag_without_touching_the_resume(self) -> None:
+        original = HEADER + BOOKED + "\nRésumé : Séjour réservé #suite-client.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "appel.txt"
+            path.write_text(original, encoding="utf-8")
+            saved = desk.soft_delete(path)
+            self.assertEqual(saved, original + "#delete\n")
+            self.assertEqual(path.read_bytes(), saved.encode("utf-8"))
+            again = desk.soft_delete(path)
+            self.assertEqual(again, saved)
+            self.assertEqual(path.read_bytes(), saved.encode("utf-8"))
+            card = desk.parse_call(desk.read_document(path), path)
+            assert card is not None
+            self.assertTrue(desk.is_deleted(card))
+            self.assertEqual(card.tags, ("#delete", "#suite-client"))
+            self.assertEqual(desk.visible_tags(card), ("#suite-client",))
+            self.assertEqual(card.resume, "Séjour réservé #suite-client.")
+            reservation = next(issue for issue in card.issues if isinstance(issue, desk.Reservation))
+            self.assertEqual(reservation.code, "1792514897")
+            restored = desk.restore_call(path)
+            self.assertEqual(restored, original)
+            card = desk.parse_call(desk.read_document(path), path)
+            assert card is not None
+            self.assertFalse(desk.is_deleted(card))
+            self.assertEqual(card.tags, ("#suite-client",))
+            self.assertEqual(card.resume, "Séjour réservé #suite-client.")
+
+    def test_delete_tag_matches_any_case_and_ignores_a_glued_hash(self) -> None:
+        spoken = "18:46:50  Appelant — mail#delete et note #DELETE ici.\n"
+        text = HEADER + spoken + "\nRésumé : À écarter #Delete.\n"
+        card = desk.parse_call(text, Path("casse.txt"))
+        assert card is not None
+        self.assertTrue(desk.is_deleted(card))
+        self.assertEqual(card.tags, ("#DELETE",))
+        self.assertEqual(desk.visible_tags(card), ())
+        restored = desk.without_delete_tag(text)
+        self.assertEqual(
+            restored,
+            HEADER + "18:46:50  Appelant — mail#delete et note ici.\n" + "\nRésumé : À écarter.\n",
+        )
+        restored_card = desk.parse_call(restored, Path("casse.txt"))
+        assert restored_card is not None
+        self.assertFalse(desk.is_deleted(restored_card))
+
+    def test_load_day_keeps_deleted_calls_apart_from_the_active_list(self) -> None:
+        later = HEADER.replace("18:46:42", "19:10:00")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = root / "record"
+            messages = root / "messages"
+            records.mkdir()
+            messages.mkdir()
+            _write(records, "actif.txt", HEADER + BOOKED + "\nRésumé : Séjour réservé #suite.\n")
+            _write(records, "poubelle.txt", later + QUOTE + "#delete\n")
+            day = desk.load_day(
+                desk.Span.of(date(2026, 10, 20), date(2026, 10, 20)),
+                records,
+                messages,
+            )
+        self.assertEqual([call.path.name for call in day.calls], ["poubelle.txt", "actif.txt"])
+        self.assertEqual([call.path.name for call in day.active_calls], ["actif.txt"])
+        self.assertEqual([call.path.name for call in day.deleted_calls], ["poubelle.txt"])
+        self.assertEqual(day.reservation_count, 1)
+        self.assertEqual(
+            desk.DayDesk(day.span, day.active_calls, day.messages).reservation_count,
+            1,
+        )
+        self.assertEqual(day.missing_resume_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ _TOOL = re.compile(r"^\d{2}:\d{2}:\d{2}  Outil (\S+) — (.*)$")
 _RESUME = "Résumé : "
 # #MOT ou #mot-compose. Le # ne doit pas être collé à un mot (C#, mail#suite).
 _HASHTAG = re.compile(r"(?<![\w#])#([^\W\d_][\w-]*)")
+# Étiquette interne : l'appel quitte la liste principale et reste dans la poubelle.
+_DELETE_TAG = "#delete"
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,14 @@ class DayDesk:
     @property
     def missing_resume_count(self) -> int:
         return sum(1 for call in self.calls if call.resume is None)
+
+    @property
+    def active_calls(self) -> tuple[CallCard, ...]:
+        return tuple(call for call in self.calls if not is_deleted(call))
+
+    @property
+    def deleted_calls(self) -> tuple[CallCard, ...]:
+        return tuple(call for call in self.calls if is_deleted(call))
 
 
 def read_document(path: Path) -> str:
@@ -223,6 +233,86 @@ def hashtags(*parts: str) -> tuple[str, ...]:
             seen.add(key)
             found.append(label)
     return tuple(found)
+
+
+def is_deleted(call: CallCard) -> bool:
+    return any(tag.casefold() == _DELETE_TAG for tag in call.tags)
+
+
+def visible_tags(call: CallCard) -> tuple[str, ...]:
+    return tuple(tag for tag in call.tags if tag.casefold() != _DELETE_TAG)
+
+
+def with_delete_tag(text: str) -> str:
+    if _has_delete_tag(text):
+        return text
+    if text.endswith("\n") or text == "":
+        return f"{text}{_DELETE_TAG}\n"
+    return f"{text}\n{_DELETE_TAG}\n"
+
+
+def without_delete_tag(text: str) -> str:
+    if not _has_delete_tag(text):
+        return text
+    kept: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body, ending = _split_ending(line)
+        if not _has_delete_tag(body):
+            kept.append(line)
+            continue
+        stripped = _strip_delete_tokens(body)
+        if stripped.strip() == "":
+            continue
+        kept.append(stripped + ending)
+    return "".join(kept)
+
+
+def soft_delete(path: Path) -> str:
+    text = with_delete_tag(read_document(path))
+    save_document(path, text)
+    return text
+
+
+def restore_call(path: Path) -> str:
+    text = without_delete_tag(read_document(path))
+    save_document(path, text)
+    return text
+
+
+def _has_delete_tag(text: str) -> bool:
+    return any(tag.casefold() == _DELETE_TAG for tag in hashtags(text))
+
+
+def _split_ending(line: str) -> tuple[str, str]:
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n"):
+        return line[:-1], "\n"
+    return line, ""
+
+
+def _strip_delete_tokens(body: str) -> str:
+    pieces: list[str] = []
+    cursor = 0
+    for match in _HASHTAG.finditer(body):
+        if not _is_delete_token(match.group(1)):
+            continue
+        start, end = match.span()
+        if start > cursor and body[start - 1] == " ":
+            start -= 1
+        elif end < len(body) and body[end] == " ":
+            end += 1
+        pieces.append(body[cursor:start])
+        cursor = end
+    pieces.append(body[cursor:])
+    return "".join(pieces)
+
+
+def _is_delete_token(token: str) -> bool:
+    cleaned = token.strip("-")
+    if not cleaned:
+        return False
+    return f"#{cleaned}".casefold() == _DELETE_TAG
 
 
 def _read_calls(folder: Path) -> list[CallCard]:
