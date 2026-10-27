@@ -185,6 +185,35 @@ class DeskTest(unittest.TestCase):
         assert card is not None
         self.assertTrue(card.console)
         self.assertEqual(card.caller, "(aucun)")
+        self.assertEqual(card.tags, ())
+
+    def test_hashtags_in_the_message_become_tags(self) -> None:
+        text = (
+            HEADER
+            + "18:50:20  Outil prendre_message — Message enregistré. "
+            + '« {"nom": "Paul", "telephone": "0651216491", '
+            + '"motif": "Client dehors #URGENT #rappel-nuit, encore #URGENT."} »\n'
+            + "\nRésumé : Le client attend dehors #suite-client.\n"
+        )
+        card = desk.parse_call(text, Path("urgent.txt"))
+        assert card is not None
+        self.assertEqual(card.tags, ("#URGENT", "#rappel-nuit", "#suite-client"))
+        self.assertIn(desk.Callback(), card.issues)
+
+    def test_hashtags_skip_duplicates_words_and_glued_hashes(self) -> None:
+        text = (
+            HEADER
+            + "18:46:50  Appelant — Rien à noter, mail hotel#interne et C# et #.\n"
+            + "18:47:00  Appelant — Puis #déjà et #Déjà.\n"
+            + "\nRésumé : Voir #déjà.\n"
+        )
+        card = desk.parse_call(text, Path("bruit.txt"))
+        assert card is not None
+        self.assertEqual(card.tags, ("#déjà",))
+        self.assertEqual(
+            desk.hashtags("fin de phrase #mot-avec-tiret! et #URGENT-"),
+            ("#mot-avec-tiret", "#URGENT"),
+        )
 
 
 if __name__ == "__main__":
